@@ -1,0 +1,14 @@
+<!--
+    SPDX-License-Identifier: BSD-2-Clause
+    Copyright (c) 2026 Abdelmonem Awad <eg2@live.com>
+-->
+<acl>
+    <page-firewall-portguard>
+        <name>Firewall: Port Guard</name>
+        <description>Allow access to the port guard: the devices blocked by their MAC address, the devices seen, and the alias and rules it makes</description>
+        <patterns>
+            <pattern>ui/portguard/*</pattern>
+            <pattern>api/portguard/*</pattern>
+        </patterns>
+    </page-firewall-portguard>
+</acl>

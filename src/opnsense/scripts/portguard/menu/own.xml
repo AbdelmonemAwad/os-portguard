@@ -1,0 +1,15 @@
+<!--
+    SPDX-License-Identifier: BSD-2-Clause
+    Copyright (c) 2026 Abdelmonem Awad <eg2@live.com>
+-->
+<menu>
+    <!--
+        Where os-xgs-npu is not installed: under Firewall, beside Block Lists, because what this
+        page makes is the firewall's - an alias of the blocked devices and the rules that block
+        them. No order is given. place-menu.sh copies this file, or xgs.xml, to the model's
+        Menu/Menu.xml.
+    -->
+    <Firewall>
+        <PortGuard VisibleName="Port Guard" cssClass="fa fa-shield fa-fw" url="/ui/portguard"/>
+    </Firewall>
+</menu>
