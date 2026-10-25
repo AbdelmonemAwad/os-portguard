@@ -1,0 +1,17 @@
+Port Guard stops devices inside the network by their MAC address: a
+listed device - or every device of one maker, by the first bytes of the
+address - can send nothing through the firewall and receive nothing
+through it. The page lists the devices the firewall sees, each a click
+from being blocked. The addresses are resolved by OPNsense's own MAC
+alias and kept current; the block rules are registered by the plugin
+and never added to the owner's own rules.
+
+Two devices behind the same switch still reach each other; blocking
+those needs the switch.
+
+Plugin Changelog
+================
+
+1.0.0
+
+* Initial release

@@ -1,0 +1,27 @@
+<!--
+    SPDX-License-Identifier: BSD-2-Clause
+    Copyright (c) 2026 Abdelmonem Awad <eg2@live.com>
+-->
+<form>
+    <field>
+        <id>device.enabled</id>
+        <label>Enabled</label>
+        <type>checkbox</type>
+        <grid_view>
+            <type>boolean</type>
+            <formatter>rowtoggle</formatter>
+            <width>6em</width>
+        </grid_view>
+    </field>
+    <field>
+        <id>device.mac</id>
+        <label>MAC address</label>
+        <type>text</type>
+        <help>The device's MAC address, 02:00:00:aa:bb:cc - or its first three to five bytes, to block every device of one maker. A device that changes its address (private Wi-Fi addresses do) is blocked only under the one listed.</help>
+    </field>
+    <field>
+        <id>device.description</id>
+        <label>Description</label>
+        <type>text</type>
+    </field>
+</form>

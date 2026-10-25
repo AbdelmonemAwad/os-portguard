@@ -2,19 +2,143 @@
 
 Layer 2 rules for the ports of the firewall: a device allowed or blocked inside the network by its MAC address or by the type of frame it sends, before the IP rules see it - and, on a Sophos XGS, in its switch where the switch can enforce them.
 
-> **Planned - nothing here runs yet.** This repository was opened on 2026-10-22 to hold
+> ~~**Planned - nothing here runs yet.** This repository was opened on 2026-10-22 to hold
 > Port Guard as a plugin of its own. No code has been written or moved into it, and there is no
-> release.
+> release.~~
+>
+> ~~**Written, not released (2026-10-22): the first part.** A device blocked by its MAC address, at the
+> firewall. There is no release, and it has not been installed on an appliance yet. What was run is
+> listed under [What is tested](#what-is-tested); what the rest needs is under
+> [Not yet, and why](#not-yet-and-why).~~
+>
+> **1.0.0, the first release (2026-10-25): the first part**, a device blocked by its MAC address at
+> the firewall. Installed and its page opened on an XGS 3300 (OPNsense 26.7.7) before the release; no
+> device has been blocked through it yet. Updated from XGS: Updates when os-xgs-npu is installed, or
+> by its own self-update - see [Updates](#updates). What the rest needs is under
+> [Not yet, and why](#not-yet-and-why).
 
-## What it is to do
+## What it does
 
-- rules by MAC address and by frame type, written as pf's Ethernet rules;
-- on a Sophos XGS, the rules the 88E6193X switch can hold, kept in the switch, so a blocked device is stopped at the port;
-- a page in the XGS section of OPNsense's menu.
+**Firewall: Port Guard** (XGS: Port Guard when os-xgs-npu is installed):
+
+- **blocked devices** - a list of MAC addresses, each a whole address or its first three to five
+  bytes (every device of one maker). The plugin keeps one MAC alias, `portguard_blocked`, from the
+  list; OPNsense resolves it into the IPv4 and IPv6 addresses its ARP and NDP tables - or its host
+  discovery - have seen each device use, and keeps them current;
+- **the rules** - registered by the plugin at every filter reload (`plugins.inc.d/portguard.inc`, as
+  os-crowdsec does): nothing from a listed device passes the firewall, on any interface, and nothing
+  reaches it through the firewall. They come before the interface rules, the anti-lockout rule
+  included, and are never added to the owner's own rules;
+- **devices seen** - the devices the firewall has seen in the last day, with their interface,
+  address and maker, each a click from being blocked; the cards say how many listed devices are
+  present and how many addresses pf blocks now.
+
+~~a page in the XGS section of OPNsense's menu~~ - it is under **Firewall**, beside Block Lists (under
+**XGS** when os-xgs-npu is installed): it is not for XGS appliances only.
+
+## Not yet, and why
+
+~~rules by MAC address and by frame type, written as pf's Ethernet rules~~ - OPNsense does not write
+Ethernet rules: its `filter.inc` assembles pf.conf from options, tables, scrubbing, translation and
+filter rules, and the anchors a plugin may register are of those kinds only (`nat`, `binat`, `rdr`,
+`fw`; read in opnsense/core stable/26.7 on 2026-10-22). pf takes its `ether` rules from the main
+ruleset, so a plugin cannot add them without a change to OPNsense itself. Until then:
+
+- **two devices behind the same switch still reach each other** - their frames never come to the
+  firewall;
+- **a frame type** (an EtherType) cannot be matched at all;
+- **a device that changes its MAC address** (private Wi-Fi addresses) is blocked only under the one
+  listed.
+
+~~on a Sophos XGS, the rules the 88E6193X switch can hold, kept in the switch, so a blocked device is
+stopped at the port~~ - still the aim, not written: the XGS 136's and 3300's front ports are on the
+88E6193X behind the coprocessor, reached through os-xgs-npu's switch tool. ~~which of the switch's
+address-table entries or port policies can discard a source address is research not yet done~~ -
+read on 2026-10-22 (os-trafficpriority's docs/research.md): the switch's TCAM matches a frame's first
+48 octets under a mask - its MAC addresses and its EtherType among them - and one of its actions sends
+the frame to no port. That is both halves of this plugin's aim at the port itself, and it would stop
+the frames between two devices too; writing it goes through os-xgs-npu, which is not to be changed
+until its owner decides.
+
+## What is tested
+
+On the second XGS 3300, 2026-10-22, from a copy in `/tmp`, nothing installed and config.xml not
+written:
+
+- every PHP file and the rules hook pass `php -l`; both Volt templates compile;
+- `status.py` read the devices through OPNsense's `list_hosts.py` (host discovery: 25 in the last
+  day, each with its interface, address and maker) and pf's table;
+- the rules hook, called as a filter reload calls it: no rule, as no device was listed.
+
+On the first XGS 3300, 2026-10-25, OPNsense 26.7.7 with os-xgs-npu installed, before the release:
+
+- installed by `install/install.sh`: rc 0, its PHP passing `php -l` in the installer;
+- the page opened in the browser, its summary cards reading the status;
+- its menu place: under **XGS** with os-xgs-npu installed; in its own section, **Firewall**, when
+  os-xgs-npu's menu file was set aside, and back under XGS when it was put back (`place-menu.sh`).
+
+Not tested: `apply.php` writing the alias (it saves config.xml), a device blocked, ~~the page in a
+browser~~ (opened on 2026-10-25, above), the package (built by `tools/make-package.sh`, added with
+pkg), and an install on a plain OPNsense, without os-xgs-npu.
+
+## Installation
+
+It is not in the OPNsense plugin repository, so there is no `pkg install os-portguard`.
+
+**From a checkout** of this repository, on the firewall, as root:
+
+```sh
+sh install/install.sh
+```
+
+It copies `src/` onto `/usr/local` (the rules hook with it), checks the PHP and the rules hook with
+`php -l` and the Python with `py_compile`, puts the page in the menu (`place-menu.sh`: XGS with
+os-xgs-npu, Firewall without) and records the commit for the self-update. Safe to run again: the
+settings in config.xml are kept. Nothing is blocked until a device is listed and applied.
+`sh install/uninstall.sh` removes the plugin and its rules; the `portguard_blocked` alias stays in
+Firewall: Aliases, blocking nothing.
+
+**From a release's package.** A release carries `os-portguard-<version>.pkg` and `SHA256SUMS`,
+built by `tools/make-package.sh` in the release workflow; installing it has not been tested yet.
+Check it and read it before adding it, as root:
+
+```sh
+sha256sum -c SHA256SUMS
+pkg info -lF os-portguard-1.0.0.pkg      # every file it will write
+pkg add os-portguard-1.0.0.pkg
+```
+
+`pkg delete os-portguard` takes the rules hook with the files and reloads the filter, so the rules
+leave pf; the settings and the `portguard_blocked` alias stay, blocking nothing. The same package is
+built on the firewall from a checkout with `sh tools/make-package.sh -o /tmp`.
+
+## Updates
+
+Taken by hand, to this repository's **releases**: from **XGS: Updates**, its *Plugins* tab, where an
+[os-xgs-npu](https://github.com/AbdelmonemAwad/os-xgs-npu) that lists this plugin is installed - the
+tab calls `/usr/local/opnsense/scripts/portguard/self-update.py`, with `check` to ask and without it
+to install - or by running that script. No cron entry runs it. It asks GitHub for the latest release
+and, when that is ahead of what is installed, downloads it and runs the `install/install.sh` it
+carries - the same script a hand install runs. A change merged on `main` reaches an installed
+firewall when it is released, not before.
+
+- **Only forward.** What is installed is recorded in `/usr/local/share/os-portguard/installed.json`
+  by the installer: the commit, from a git checkout or from the `.source-commit` stamp an update
+  leaves in the tree. A firewall running something newer than the release is not taken back; an
+  install with no commit recorded takes the latest release once.
+- **A package install records no commit**, so its first self-update takes the latest release and
+  installs it with `install/install.sh`, outside pkg. A package is updated with a newer package
+  instead: `pkg add -f`.
+- **What happened** is in the system log as `self-update`, in
+  `/usr/local/share/os-portguard/update.json`, and the installer's output in `update.log` beside it.
+- `self-update.py check` says what it would do and changes nothing.
+
+Not tested yet: an update taken this way - 1.0.0 is the first release, so none has been ahead of an
+installed copy.
 
 ## Where it fits
 
-It is one part of the [os-xgs-npu](https://github.com/AbdelmonemAwad/os-xgs-npu) project, which puts OPNsense on Sophos XGS hardware, and works the way its other plugins do: changes by pull request, a release installed from **XGS: Updates**, its Arabic in [opnsense-arabic](https://github.com/AbdelmonemAwad/opnsense-arabic)'s catalogue.
+It is one part of the [os-xgs-npu](https://github.com/AbdelmonemAwad/os-xgs-npu) project, which puts OPNsense on Sophos XGS hardware, and works the way its other plugins do: changes by pull request, a release installed from **XGS: Updates** (once it is listed there), its Arabic in [opnsense-arabic](https://github.com/AbdelmonemAwad/opnsense-arabic)'s catalogue.
 
 ## Licence
 

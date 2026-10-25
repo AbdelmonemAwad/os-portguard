@@ -1,0 +1,14 @@
+<?php
+
+/*
+ * SPDX-License-Identifier: BSD-2-Clause
+ * Copyright (c) 2026 Abdelmonem Awad <eg2@live.com>
+ */
+
+namespace OPNsense\PortGuard;
+
+use OPNsense\Base\BaseModel;
+
+class PortGuard extends BaseModel
+{
+}

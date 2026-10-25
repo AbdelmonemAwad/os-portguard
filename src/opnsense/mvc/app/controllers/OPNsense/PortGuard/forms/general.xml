@@ -1,0 +1,18 @@
+<!--
+    SPDX-License-Identifier: BSD-2-Clause
+    Copyright (c) 2026 Abdelmonem Awad <eg2@live.com>
+-->
+<form>
+    <field>
+        <id>portguard.general.enabled</id>
+        <label>Enabled</label>
+        <type>checkbox</type>
+        <help>Block the devices listed. Off, the rules are gone at the next filter reload; the list stays.</help>
+    </field>
+    <field>
+        <id>portguard.general.log</id>
+        <label>Log blocked packets</label>
+        <type>checkbox</type>
+        <help>Write every packet the rules block to the firewall log.</help>
+    </field>
+</form>
