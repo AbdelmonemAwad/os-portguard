@@ -45,7 +45,10 @@ filter rules, and the anchors a plugin may register are of those kinds only (`na
 ruleset, so a plugin cannot add them without a change to OPNsense itself. Until then:
 
 - **two devices behind the same switch still reach each other** - their frames never come to the
-  firewall;
+  firewall. Except on an XGS 3300's or XGS 136's own front ports, measured 2026-10-25: a frame for
+  the device on another front port never crosses inside the switch but goes to the coprocessor, and
+  traffic routed between two front ports meets the firewall's rules
+  ([os-xgs-npu's measurement](https://github.com/AbdelmonemAwad/os-xgs-npu/blob/main/docs/measurements/frontports-2026-10-25.md));
 - **a frame type** (an EtherType) cannot be matched at all;
 - **a device that changes its MAC address** (private Wi-Fi addresses) is blocked only under the one
   listed.
@@ -54,11 +57,14 @@ ruleset, so a plugin cannot add them without a change to OPNsense itself. Until 
 stopped at the port~~ - still the aim, not written: the XGS 136's and 3300's front ports are on the
 88E6193X behind the coprocessor, reached through os-xgs-npu's switch tool. ~~which of the switch's
 address-table entries or port policies can discard a source address is research not yet done~~ -
-read on 2026-10-22 (os-trafficpriority's docs/research.md): the switch's TCAM matches a frame's first
-48 octets under a mask - its MAC addresses and its EtherType among them - and one of its actions sends
-the frame to no port. That is both halves of this plugin's aim at the port itself, and it would stop
-the frames between two devices too; writing it goes through os-xgs-npu, which is not to be changed
-until its owner decides.
+read on 2026-10-22 (~~os-trafficpriority's docs/research.md~~
+[os-xgs-npu's discoveries of that day](https://github.com/AbdelmonemAwad/os-xgs-npu/blob/main/docs/findings/discoveries-2026-10-22.md#the-tcam-254-of-256-entries-are-the-vendors)):
+the switch's TCAM matches a frame's first 48 octets under a mask - its MAC addresses and its EtherType
+among them - and one of its actions sends the frame to no port. That is both halves of this plugin's
+aim at the port itself~~, and it would stop the frames between two devices too~~ (those already pass
+the coprocessor, above); ~~writing it goes through os-xgs-npu, which is not to be changed until its
+owner decides~~ but 254 of its 256 entries are already the vendor's, read the same day - entries 3
+and 255 are free - so the TCAM is not free to use for this plugin's rules.
 
 ## What is tested
 
