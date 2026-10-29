@@ -12,11 +12,17 @@
  * plugin off, the alias is removed - unless something else in config.xml still names it, when it is
  * left switched off.
  *
- *   apply.php     print a JSON summary; the page's Apply then reloads the filter and the aliases
+ * Then the rest of what puts the list into the firewall, here rather than in the page's controller,
+ * so `configctl portguard apply` does the whole job (2026-10-29: alone it wrote the alias and put no
+ * rule into pf): the filter reloaded, which registers the rules; the filter's template and the
+ * aliases, which resolve the addresses.
+ *
+ *   apply.php     print a JSON summary (the page's Apply, and configctl portguard apply)
  */
 
 require_once('script/load_phalcon.php');
 
+use OPNsense\Core\Backend;
 use OPNsense\Core\Config;
 use OPNsense\Firewall\Alias;
 use OPNsense\PortGuard\PortGuard;
@@ -78,4 +84,11 @@ if (!empty($messages)) {
 }
 $model->serializeToConfig();
 Config::getInstance()->save();
+
+/* the order Firewall: Aliases and the page's Apply always used: the filter, its template, the aliases */
+$backend = new Backend();
+$backend->configdRun('filter reload skip_alias');
+$backend->configdRun('template reload OPNsense/Filter');
+$backend->configdRun('filter refresh_aliases');
+
 echo json_encode(['status' => 'ok', 'changes' => $report]) . "\n";

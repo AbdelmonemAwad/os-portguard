@@ -40,22 +40,16 @@ class ServiceController extends ApiControllerBase
     }
 
     /**
-     * the alias from the device list just saved, then the filter (which registers the rules) and the
-     * aliases (which resolve the addresses) reloaded the way Firewall: Aliases reloads them
+     * the device list just saved, put into the firewall by apply.php: the alias, then the filter (which
+     * registers the rules) and the aliases (which resolve the addresses) reloaded the way Firewall:
+     * Aliases reloads them - all in the one action, so `configctl portguard apply` does the same
      */
     public function applyAction()
     {
         if (!$this->request->isPost()) {
             return ['status' => 'failed'];
         }
-        $backend = new Backend();
-        $result = json_decode($backend->configdRun('portguard apply'), true);
-        if (!is_array($result) || ($result['status'] ?? '') !== 'ok') {
-            return is_array($result) ? $result : ['status' => 'failed'];
-        }
-        $backend->configdRun('filter reload skip_alias');
-        $backend->configdRun('template reload OPNsense/Filter');
-        $backend->configdRun('filter refresh_aliases');
-        return $result;
+        $result = json_decode((new Backend())->configdRun('portguard apply'), true);
+        return is_array($result) ? $result : ['status' => 'failed'];
     }
 }

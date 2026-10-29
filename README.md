@@ -94,7 +94,8 @@ OPNsense/Filter` and `filter refresh_aliases`.
   sum checked OK. `pkg add` returned 0, and the page is under Firewall > Port Guard.
 - **The alias.** apply answered `portguard_blocked: added, 1 device(s)`, and OPNsense resolved the
   MAC address to 192.168.1.2. The rules are not in pf after apply alone; the page's filter reload is
-  what puts them there.
+  what puts them there. (Since 2026-10-29 `configctl portguard apply` runs those reloads itself, as
+  the page's Apply now does through it; not yet tested.)
 - **The rules.** pf holds `block drop in quick from <portguard_blocked>` and `block drop out quick
   to <portguard_blocked>`, for inet and for inet6.
 - **A device blocked.** The web server was reached before; while the device was listed it was not
