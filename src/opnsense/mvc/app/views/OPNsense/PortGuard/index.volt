@@ -65,13 +65,20 @@
         }
         /* KIT-JS-END */
 
+        /* A device with several addresses - IPv4, IPv6, a link-local one - is a row of status.py's list
+           for each; the cards count devices, by MAC address (2026-10-29: they counted rows, so a device
+           with three addresses was three devices). */
+        function devices(rows) {
+            return new Set(rows.map(function (d) { return d.mac; })).size;
+        }
+
         function draw(data) {
             const $cards = $('#pg-cards').empty();
             if (!data || data.error) {
                 $cards.append(card('bad', 'fa-shield', "{{ lang._('Port Guard') }}", "{{ lang._('The status could not be read.') }}", ''));
                 return;
             }
-            const present = data.seen.filter(function (d) { return d.listed; }).length;
+            const present = devices(data.seen.filter(function (d) { return d.listed; }));
             $cards.append(card(!data.enabled ? '' : (data.listed.length ? 'ok' : ''), 'fa-shield', "{{ lang._('Devices listed') }}",
                 data.enabled ? String(data.listed.length) : "{{ lang._('off') }}",
                 present + ' ' + "{{ lang._('of them seen now') }}"));
@@ -80,7 +87,7 @@
             const packets = (data.counters.in || 0) + (data.counters.out || 0);
             $cards.append(card('', 'fa-filter', "{{ lang._('Blocked') }}", packets.toLocaleString(),
                 "{{ lang._('packets since the table was loaded') }}"));
-            $cards.append(card('', 'fa-sitemap', "{{ lang._('Devices seen') }}", String(data.seen.length),
+            $cards.append(card('', 'fa-sitemap', "{{ lang._('Devices seen') }}", String(devices(data.seen)),
                 data.source === 'discovery' ? "{{ lang._('from host discovery') }}" : "{{ lang._('from the ARP and NDP tables') }}"));
         }
 
@@ -130,7 +137,18 @@
                 '<br/><br/><code>' + $('<div/>').text(mac + '  ' + ip).html() + '</code>',
                 "{{ lang._('Yes') }}", "{{ lang._('Cancel') }}", function () {
                     ajaxCall('/api/portguard/settings/add_device', {'device': {'enabled': '1', 'mac': mac,
-                        'description': vendor + ' ' + ip}}, function () {
+                        'description': vendor + ' ' + ip}}, function (data) {
+                        if (!data || data.result !== 'saved') {
+                            /* Refused - listed already, though switched off, say: the model's reasons,
+                               not the note that the list has changed, which it has not (2026-10-29). */
+                            const reasons = data && data.validations ? Object.values(data.validations) : [];
+                            if (reasons.length) {
+                                stdDialogInform("{{ lang._('Block this device') }}",
+                                    $('<div/>').text(reasons.map(plain).join(' ')).html(), "{{ lang._('Close') }}");
+                            }
+                            $("#{{ formGridDevice['table_id'] }}").bootgrid('reload');
+                            return;
+                        }
                         $("#{{ formGridDevice['table_id'] }}").bootgrid('reload');
                         $('#grid-seen').bootgrid('reload');
                         $('#pg-apply-needed').show();
