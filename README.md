@@ -105,13 +105,20 @@ OPNsense/Filter` and `filter refresh_aliases`.
   it was listed, the alias resolved to the second machine's address, pf held the four rules, and
   neither reached the other. Once it was removed and applied again, both did again. pf's table kept
   the address after the last device was removed, but no rule referred to it then.
+- **A device that changes its MAC address.** The second machine, listed by its whole address, took
+  another one and kept its IPv4 address: it stayed blocked. OPNsense's host discovery still held the
+  listed address with that IPv4 address, so the alias kept it - through nine minutes and a refresh
+  of the aliases. With another IPv4 address as well, as a new DHCP lease would give it, it was
+  reached at once: a device is blocked only under the address listed. Listed by its first four bytes
+  instead, it took another address within them and another IPv4 address, and was blocked again 22
+  seconds later: the alias had gained the new one.
 
 Not tested: ~~`apply.php` writing the alias (it saves config.xml), a device blocked~~ (on 2026-10-29
 in qemu, above), ~~the page in a browser~~ (opened on 2026-10-25, above), ~~the package (built by
 `tools/make-package.sh`, added with pkg), and an install on a plain OPNsense, without os-xgs-npu~~
 (on 2026-10-29 in qemu, above). Still not: ~~a device that is a separate machine on the LAN~~ (a
-second machine, on an interface of its own, on 2026-10-29 in qemu, above), and a device that changes
-its MAC address.
+second machine, on an interface of its own, on 2026-10-29 in qemu, above), ~~and a device that changes
+its MAC address~~ (on 2026-10-29 in qemu, above).
 
 ## Installation
 
@@ -165,8 +172,14 @@ firewall when it is released, not before.
   `/usr/local/share/os-portguard/update.json`, and the installer's output in `update.log` beside it.
 - `self-update.py check` says what it would do and changes nothing.
 
-Not tested yet: an update taken this way - 1.0.0 is the first release, so none has been ahead of an
-installed copy.
+~~Not tested yet: an update taken this way - 1.0.0 is the first release, so none has been ahead of
+an installed copy.~~ Tested on 2026-10-29 on a plain OPNsense 26.7 in qemu, where the package had
+been added with pkg, which records no commit: `self-update.py check` found the release `v1.0.0`
+(5353a6423145) and nothing installed to compare it with, so to be taken. `self-update.py` fetched
+its source, ran its `install/install.sh` and answered `updated to v1.0.0 (5353a6423145)`, which the
+system log has too. `installed.json` then recorded that commit, from the stamp, and a second check
+found it identical: nothing to take. Not yet: a release ahead of the one installed - 1.0.0 is
+still the only release.
 
 ## Where it fits
 
