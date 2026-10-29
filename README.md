@@ -1,4 +1,20 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/banner-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/readme/banner-light.svg">
+  <img src="docs/images/readme/banner-light.svg" alt="os-portguard - Devices blocked by their MAC address" width="100%">
+</picture>
+
 # Port Guard for OPNsense
+
+[![release](https://img.shields.io/github/v/release/AbdelmonemAwad/os-portguard?sort=semver&style=flat-square&color=555555)](https://github.com/AbdelmonemAwad/os-portguard/releases/latest)
+[![checks](https://github.com/AbdelmonemAwad/os-portguard/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/AbdelmonemAwad/os-portguard/actions/workflows/checks.yml)
+[![licence: BSD-2-Clause](https://img.shields.io/badge/licence-BSD--2--Clause-blue.svg?style=flat-square)](LICENSE)
+[![OPNsense 26.7](https://img.shields.io/badge/OPNsense-26.7-d94f00.svg?style=flat-square)](#what-is-tested)
+[![part of os-xgs-npu](https://img.shields.io/badge/part%20of-os--xgs--npu-9a6700.svg?style=flat-square)](https://github.com/AbdelmonemAwad/os-xgs-npu)
+
+[![listed device: blocked both ways](https://img.shields.io/badge/listed%20device-blocked%20both%20ways-brightgreen.svg?style=flat-square)](#what-is-tested)
+[![MAC change: blocked again in 22 s, by a 4-byte prefix](https://img.shields.io/badge/MAC%20change-blocked%20again%20in%2022%20s%2C%20by%20a%204--byte%20prefix-brightgreen.svg?style=flat-square)](#what-is-tested)
+[![Ethernet rules · switch: not yet](https://img.shields.io/badge/Ethernet%20rules%20%C2%B7%20switch-not%20yet-lightgrey.svg?style=flat-square)](#not-yet-and-why)
 
 ~~Layer 2 rules for the ports of the firewall: a device allowed or blocked inside the network by its MAC address or by the type of frame it sends, before the IP rules see it - and, on a Sophos XGS, in its switch where the switch can enforce them.~~ A device inside the network blocked by its MAC address - or every device of one maker, by the first bytes of the address - at the firewall: OPNsense resolves the addresses listed into the IP addresses the devices use, and the firewall's IP rules block those. Not done (2026-10-29): allowing only the devices listed, which is not written; and matching a frame by its type or blocking in an XGS's switch - see [Not yet, and why](#not-yet-and-why).
 
@@ -10,6 +26,9 @@
 > firewall. There is no release, and it has not been installed on an appliance yet. What was run is
 > listed under [What is tested](#what-is-tested); what the rest needs is under
 > [Not yet, and why](#not-yet-and-why).~~
+>
+> **1.0.1 (2026-10-30):** a device listed loses its open connections, `configctl portguard apply` does the whole job, the table emptied when no device is left, and a removal that leaves nothing behind. Tested in qemu on OPNsense 26.7.7 before the release; see
+> [What is tested](#what-is-tested).
 >
 > **1.0.0, the first release (2026-10-25): the first part**, a device blocked by its MAC address at
 > the firewall. Installed and its page opened on an XGS 3300 (OPNsense 26.7.7) before the release;
@@ -176,8 +195,8 @@ Check it and read it before adding it, as root:
 
 ```sh
 sha256sum -c SHA256SUMS
-pkg info -lF os-portguard-1.0.0.pkg      # every file it will write
-pkg add os-portguard-1.0.0.pkg
+pkg info -lF os-portguard-*.pkg       # every file it will write
+pkg add os-portguard-*.pkg
 ```
 
 `pkg delete os-portguard` takes the rules hook with the files and reloads the filter, so the rules
