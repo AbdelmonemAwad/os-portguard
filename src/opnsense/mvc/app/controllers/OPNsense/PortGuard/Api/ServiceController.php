@@ -15,7 +15,7 @@ class ServiceController extends ApiControllerBase
     public function statusAction()
     {
         $result = json_decode((new Backend())->configdRun('portguard status'), true);
-        return is_array($result) ? $result : ['error' => gettext('The status could not be read.')];
+        return is_array($result) ? $result : ['error' => gettext('Status could not be read.')];
     }
 
     /**

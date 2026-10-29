@@ -16,6 +16,7 @@
  "ID",
  "IP address",
  "Interface",
+ "List changed; Apply puts it into the firewall.",
  "MAC address",
  "Maker",
  "Nothing to change.",
@@ -23,13 +24,12 @@
  "Port Guard",
  "Refresh",
  "Settings",
- "The list has changed; Apply puts it into the firewall.",
- "The status could not be read.",
+ "Status could not be read.",
  "Yes",
  "blocked",
  "from host discovery",
  "from the ARP and NDP tables",
  "of them seen now",
  "off",
- "packets since the table was loaded"
+ "packets since table loaded"
 ]

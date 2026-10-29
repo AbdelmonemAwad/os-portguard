@@ -75,7 +75,7 @@
         function draw(data) {
             const $cards = $('#pg-cards').empty();
             if (!data || data.error) {
-                $cards.append(card('bad', 'fa-shield', "{{ lang._('Port Guard') }}", "{{ lang._('The status could not be read.') }}", ''));
+                $cards.append(card('bad', 'fa-shield', "{{ lang._('Port Guard') }}", "{{ lang._('Status could not be read.') }}", ''));
                 return;
             }
             const present = devices(data.seen.filter(function (d) { return d.listed; }));
@@ -86,7 +86,7 @@
                 String(data.blocked_now.length), data.blocked_now.slice(0, 3).join(' ')));
             const packets = (data.counters.in || 0) + (data.counters.out || 0);
             $cards.append(card('', 'fa-filter', "{{ lang._('Blocked') }}", packets.toLocaleString(),
-                "{{ lang._('packets since the table was loaded') }}"));
+                "{{ lang._('packets since table loaded') }}"));
             $cards.append(card('', 'fa-sitemap', "{{ lang._('Devices seen') }}", String(devices(data.seen)),
                 data.source === 'discovery' ? "{{ lang._('from host discovery') }}" : "{{ lang._('from the ARP and NDP tables') }}"));
         }
@@ -211,7 +211,7 @@
     {{ lang._('A listed device is stopped at the firewall: nothing it sends passes through it, and nothing reaches it through it. Two devices behind the same switch still reach each other - their frames never come to the firewall.') }}
 </div>
 <div id="pg-apply-needed" style="display: none; padding: 0 0 10px;">
-    <a href="#settings" id="pg-apply-go" class="text-warning">{{ lang._('The list has changed; Apply puts it into the firewall.') }}</a>
+    <a href="#settings" id="pg-apply-go" class="text-warning">{{ lang._('List changed; Apply puts it into the firewall.') }}</a>
 </div>
 
 <ul class="nav nav-tabs" data-tabs="tabs" id="maintabs">
