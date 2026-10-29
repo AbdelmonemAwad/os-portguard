@@ -6,7 +6,7 @@
 # Install the Port Guard plugin from a copy of this repository on the firewall:
 #   sh install/install.sh
 # Safe to run again after an update: settings in config.xml are kept. Nothing is blocked until a
-# device is listed on the page and applied.
+# device is listed on the page and applied; the cron entry's cut does nothing until then either.
 
 set -e
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -16,7 +16,7 @@ cp -R "${HERE}/src/" /usr/local/
 chmod 755 /usr/local/opnsense/scripts/portguard/*.py /usr/local/opnsense/scripts/portguard/apply.php \
     /usr/local/opnsense/scripts/portguard/place-menu.sh
 chmod 644 /usr/local/opnsense/scripts/portguard/i18n/ui/source.json
-chmod 644 /usr/local/etc/inc/plugins.inc.d/portguard.inc
+chmod 644 /usr/local/etc/cron.d/portguard /usr/local/etc/inc/plugins.inc.d/portguard.inc
 chmod 644 /usr/local/opnsense/service/conf/actions.d/actions_portguard.conf
 
 # syntax check before anything is reloaded
@@ -30,6 +30,9 @@ done
 # The page's place in the menu: the XGS section where os-xgs-npu is installed, Firewall where it is
 # not. place-menu.sh writes the menu file and says which it chose: "xgs" or "own".
 WHERE=$(/usr/local/opnsense/scripts/portguard/place-menu.sh)
+
+# where cut.py keeps what the blocked devices' table held at its last run
+install -d -o root -g wheel -m 0750 /var/db/os-portguard
 
 # reload configd actions, menu and ACL caches; the filter, so the rules hook is read
 service configd restart > /dev/null

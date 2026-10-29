@@ -1,0 +1,10 @@
+#-
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Abdelmonem Awad <eg2@live.com>
+#
+# Every minute: the connections open to or from an address the blocked devices' alias has just
+# gained are cut (cut.py) - a block rule stops new connections only, and the alias gains an address
+# when a listed device takes a new one. Apply cuts what the devices listed have open already. With no
+# device listed, or Port Guard off, it reads config.xml once and exits.
+
+* * * * * root /usr/local/opnsense/scripts/portguard/cut.py > /dev/null 2>&1

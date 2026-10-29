@@ -24,6 +24,10 @@ rm -f /usr/local/opnsense/mvc/app/models/OPNsense/PortGuard/Menu/Menu.xml
 rmdir /usr/local/opnsense/mvc/app/models/OPNsense/PortGuard/Menu /usr/local/opnsense/mvc/app/models/OPNsense/PortGuard 2>/dev/null || true
 rm -f /var/lib/php/tmp/opnsense_menu_cache.xml /tmp/opnsense_menu_cache.xml
 
+# Nor is what cut.py kept, the table's last reading: left, it would hide from a reinstall the
+# connections its first run should cut.
+rm -rf /var/db/os-portguard
+
 [ -f /usr/local/sbin/configctl ] && /usr/local/sbin/configctl filter reload > /dev/null 2>&1 || true
 
 echo "Port Guard removed; its alias stays in Firewall: Aliases"

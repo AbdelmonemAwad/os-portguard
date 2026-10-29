@@ -15,7 +15,8 @@
  * Then the rest of what puts the list into the firewall, here rather than in the page's controller,
  * so `configctl portguard apply` does the whole job (2026-10-29: alone it wrote the alias and put no
  * rule into pf): the filter reloaded, which registers the rules; the filter's template and the
- * aliases, which resolve the addresses.
+ * aliases, which resolve the addresses; and a first round of cut.py, which cuts the connections the
+ * devices listed already have open - a rule stops only new ones.
  *
  *   apply.php     print a JSON summary (the page's Apply, and configctl portguard apply)
  */
@@ -90,5 +91,7 @@ $backend = new Backend();
 $backend->configdRun('filter reload skip_alias');
 $backend->configdRun('template reload OPNsense/Filter');
 $backend->configdRun('filter refresh_aliases');
+/* then the cut, once the table holds the addresses the aliases' refresh resolved */
+$cut = json_decode($backend->configdRun('portguard cut'), true);
 
-echo json_encode(['status' => 'ok', 'changes' => $report]) . "\n";
+echo json_encode(['status' => 'ok', 'changes' => $report, 'cut' => is_array($cut) ? $cut : null]) . "\n";

@@ -10,6 +10,8 @@ if [ -f /usr/local/etc/rc.d/configd ]; then
 	/usr/local/etc/rc.d/configd restart
 fi
 
+# where cut.py keeps what the blocked devices' table held at its last run
+install -d -o root -g wheel -m 0750 /var/db/os-portguard
 
 if [ -f /usr/local/opnsense/mvc/script/run_migrations.php ]; then
 	/usr/local/opnsense/mvc/script/run_migrations.php OPNsense/PortGuard

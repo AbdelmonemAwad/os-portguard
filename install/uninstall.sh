@@ -7,7 +7,8 @@
 # registered by the hook removed below. Kept: the settings, and the portguard_blocked alias in
 # Firewall: Aliases, which blocks nothing without the rules - remove it there when no longer wanted.
 
-# the rules hook first, which would stop a filter reload if it outlived its model
+# the cron entry first, and the rules hook, which would stop a filter reload if it outlived its model
+rm -f /usr/local/etc/cron.d/portguard
 rm -f /usr/local/etc/inc/plugins.inc.d/portguard.inc
 rm -rf /usr/local/share/os-portguard
 rm -f /usr/local/opnsense/service/conf/actions.d/actions_portguard.conf
@@ -18,6 +19,9 @@ rmdir /usr/local/opnsense/mvc/app/models/OPNsense/PortGuard/Menu 2>/dev/null || 
 rm -rf /usr/local/opnsense/mvc/app/models/OPNsense/PortGuard
 rm -rf /usr/local/opnsense/mvc/app/controllers/OPNsense/PortGuard
 rm -rf /usr/local/opnsense/mvc/app/views/OPNsense/PortGuard
+# what cut.py kept - the table's last reading - which is no file of src/'s: left, it would hide from
+# a reinstall the connections its first run should cut
+rm -rf /var/db/os-portguard
 service configd restart > /dev/null
 # PHP keeps them in its own temporary directory on 26.7 (/var/lib/php/tmp); /tmp is where they were
 rm -f /var/lib/php/tmp/opnsense_menu_cache.xml /var/lib/php/tmp/opnsense_acl_cache.json \

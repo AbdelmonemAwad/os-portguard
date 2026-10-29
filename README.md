@@ -30,6 +30,12 @@ Layer 2 rules for the ports of the firewall: a device allowed or blocked inside 
   os-crowdsec does): nothing from a listed device passes the firewall, on any interface, and nothing
   reaches it through the firewall. They come before the interface rules, the anti-lockout rule
   included, and are never added to the owner's own rules;
+- **open connections cut** - a rule stops new connections only. The connections a listed device
+  already has open are cut when Apply puts it into the firewall, and every minute those to or from
+  an address the alias has just gained (`cut.py`, from a cron entry); always on. On an XGS,
+  os-xgs-npu's drivers take a connection out of the coprocessor once pf no longer holds its state.
+  Written on 2026-10-29, after the tests below - until then nothing cut a connection already open,
+  and it went on - and not yet tested;
 - **devices seen** - the devices the firewall has seen in the last day, with their interface,
   address and maker, each a click from being blocked; the cards say how many listed devices are
   present and how many addresses pf blocks now.
