@@ -12,10 +12,11 @@ Layer 2 rules for the ports of the firewall: a device allowed or blocked inside 
 > [Not yet, and why](#not-yet-and-why).~~
 >
 > **1.0.0, the first release (2026-10-25): the first part**, a device blocked by its MAC address at
-> the firewall. Installed and its page opened on an XGS 3300 (OPNsense 26.7.7) before the release; no
-> device has been blocked through it yet. Updated from XGS: Updates when os-xgs-npu is installed, or
-> by its own self-update - see [Updates](#updates). What the rest needs is under
-> [Not yet, and why](#not-yet-and-why).
+> the firewall. Installed and its page opened on an XGS 3300 (OPNsense 26.7.7) before the release;
+> ~~no device has been blocked through it yet~~ - since, on 2026-10-29 in qemu, two were: qemu's
+> gateway on the LAN, and a second machine (see [What is tested](#what-is-tested)). Updated from
+> XGS: Updates when os-xgs-npu is installed, or by its own self-update - see [Updates](#updates).
+> What the rest needs is under [Not yet, and why](#not-yet-and-why).
 
 ## What it does
 
@@ -98,12 +99,19 @@ OPNsense/Filter` and `filter refresh_aliases`.
   to <portguard_blocked>`, for inet and for inet6.
 - **A device blocked.** The web server was reached before; while the device was listed it was not
   reached; and once the device was removed and applied again, it was reached again.
+- **A separate machine.** A second such machine, a copy of the first, joined to it by a cable of
+  their own - an interface of its own on each, not the LAN. It was listed by its MAC address, read
+  from the ARP table, and applied the same way. Before, each machine reached the other (ping). While
+  it was listed, the alias resolved to the second machine's address, pf held the four rules, and
+  neither reached the other. Once it was removed and applied again, both did again. pf's table kept
+  the address after the last device was removed, but no rule referred to it then.
 
 Not tested: ~~`apply.php` writing the alias (it saves config.xml), a device blocked~~ (on 2026-10-29
 in qemu, above), ~~the page in a browser~~ (opened on 2026-10-25, above), ~~the package (built by
 `tools/make-package.sh`, added with pkg), and an install on a plain OPNsense, without os-xgs-npu~~
-(on 2026-10-29 in qemu, above). Still not: a device that is a separate machine on the LAN, and a
-device that changes its MAC address.
+(on 2026-10-29 in qemu, above). Still not: ~~a device that is a separate machine on the LAN~~ (a
+second machine, on an interface of its own, on 2026-10-29 in qemu, above), and a device that changes
+its MAC address.
 
 ## Installation
 
