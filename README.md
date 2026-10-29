@@ -1,6 +1,6 @@
 # Port Guard for OPNsense
 
-Layer 2 rules for the ports of the firewall: a device allowed or blocked inside the network by its MAC address or by the type of frame it sends, before the IP rules see it - and, on a Sophos XGS, in its switch where the switch can enforce them.
+~~Layer 2 rules for the ports of the firewall: a device allowed or blocked inside the network by its MAC address or by the type of frame it sends, before the IP rules see it - and, on a Sophos XGS, in its switch where the switch can enforce them.~~ A device inside the network blocked by its MAC address - or every device of one maker, by the first bytes of the address - at the firewall: OPNsense resolves the addresses listed into the IP addresses the devices use, and the firewall's IP rules block those. Not done (2026-10-29): allowing only the devices listed, which is not written; and matching a frame by its type or blocking in an XGS's switch - see [Not yet, and why](#not-yet-and-why).
 
 > ~~**Planned - nothing here runs yet.** This repository was opened on 2026-10-22 to hold
 > Port Guard as a plugin of its own. No code has been written or moved into it, and there is no
@@ -57,8 +57,13 @@ ruleset, so a plugin cannot add them without a change to OPNsense itself. Until 
   traffic routed between two front ports meets the firewall's rules
   ([os-xgs-npu's measurement](https://github.com/AbdelmonemAwad/os-xgs-npu/blob/main/docs/measurements/frontports-2026-10-25.md));
 - **a frame type** (an EtherType) cannot be matched at all;
-- **a device that changes its MAC address** (private Wi-Fi addresses) is blocked only under the one
-  listed.
+- **a device that changes its MAC address** (private Wi-Fi addresses) is blocked ~~only under the one
+  listed~~ under the one listed, and - measured on 2026-10-29 in qemu, see
+  [What is tested](#what-is-tested) - under the IPv4 address it used with it, for as long as
+  OPNsense's host discovery holds the two together: one that took another MAC address but kept its
+  IPv4 address stayed blocked, through nine minutes and a refresh of the aliases; with a new IPv4
+  address as well it was reached at once. Not measured: by the same holding, another device given
+  that IPv4 address afterwards would be blocked too, until the old pair is let go.
 
 ~~on a Sophos XGS, the rules the 88E6193X switch can hold, kept in the switch, so a blocked device is
 stopped at the port~~ - still the aim, not written: the XGS 136's and 3300's front ports are on the
@@ -111,7 +116,9 @@ OPNsense/Filter` and `filter refresh_aliases`.
   from the ARP table, and applied the same way. Before, each machine reached the other (ping). While
   it was listed, the alias resolved to the second machine's address, pf held the four rules, and
   neither reached the other. Once it was removed and applied again, both did again. pf's table kept
-  the address after the last device was removed, but no rule referred to it then.
+  the address after the last device was removed, but no rule referred to it then. (Since 2026-10-29
+  the Apply empties the table when no device is left, and the page counts its addresses only while
+  a rule uses it; not yet tested.)
 - **A device that changes its MAC address.** The second machine, listed by its whole address, took
   another one and kept its IPv4 address: it stayed blocked. OPNsense's host discovery still held the
   listed address with that IPv4 address, so the alias kept it - through nine minutes and a refresh
@@ -126,6 +133,13 @@ in qemu, above), ~~the page in a browser~~ (opened on 2026-10-25, above), ~~the 
 (on 2026-10-29 in qemu, above). Still not: ~~a device that is a separate machine on the LAN~~ (a
 second machine, on an interface of its own, on 2026-10-29 in qemu, above), ~~and a device that changes
 its MAC address~~ (on 2026-10-29 in qemu, above).
+
+Written after the tests above and not yet tested (2026-10-29): the cut of the connections a listed
+device already has open, at Apply and every minute; `configctl portguard apply` doing the whole of
+the page's Apply; the table emptied when no device is left, and the page's addresses counted only
+while a rule uses the table; the cards counting devices rather than addresses, and the Block
+button's answer; the checks before the copy; and the removal's stopping of a running cut, its
+deleting of the state and its emptying of a stale table.
 
 ## Installation
 
@@ -156,7 +170,8 @@ uses it - a table outlives its alias, and went on holding the addresses (all of 
 2026-10-29).
 
 **From a release's package.** A release carries `os-portguard-<version>.pkg` and `SHA256SUMS`,
-built by `tools/make-package.sh` in the release workflow; installing it has not been tested yet.
+built by `tools/make-package.sh` in the release workflow; ~~installing it has not been tested yet~~
+it was added with pkg on a plain OPNsense on 2026-10-29 - see [What is tested](#what-is-tested).
 Check it and read it before adding it, as root:
 
 ```sh
