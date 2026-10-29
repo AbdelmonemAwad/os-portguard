@@ -44,10 +44,13 @@ def main():
         return
     general = root.find('OPNsense/PortGuard/general')
     enabled = general is None or (general.findtext('enabled') or '1') == '1'
+    # a device is listed - blocked - only while Port Guard is on: off, the page marked the devices it
+    # names as blocked all the same (2026-10-29)
     listed = []
-    for device in root.findall('OPNsense/PortGuard/devices/device'):
-        if (device.findtext('enabled') or '1') == '1' and device.findtext('mac'):
-            listed.append(norm(device.findtext('mac')))
+    if enabled:
+        for device in root.findall('OPNsense/PortGuard/devices/device'):
+            if (device.findtext('enabled') or '1') == '1' and device.findtext('mac'):
+                listed.append(norm(device.findtext('mac')))
 
     # the firewall's own interface names, for the device table
     names = {}
@@ -69,13 +72,18 @@ def main():
             'listed': any(mac.startswith(prefix) for prefix in listed),
         })
 
-    table = [line.strip() for line in run([PFCTL, '-t', TABLE, '-T', 'show']).splitlines() if line.strip()]
     counters = {}
     verbose = run([PFCTL, '-vvs', 'Tables'])
-    block = re.search(r'^\S+\s+' + TABLE + r'\n((?:\s+.*\n?)*)', verbose, re.M)
+    block = re.search(r'^(\S+)\s+' + TABLE + r'\n((?:\s+.*\n?)*)', verbose, re.M)
     if block:
-        for direction, packets in re.findall(r'(In|Out)/Block:\s+\[ Packets: (\d+)', block.group(1)):
+        for direction, packets in re.findall(r'(In|Out)/Block:\s+\[ Packets: (\d+)', block.group(2)):
             counters[direction.lower()] = int(packets)
+    # The addresses pf blocks now: the table's, while a rule uses it - its flags carry r (referenced).
+    # A table outlives its alias and its rules, and with no device left it went on holding the old
+    # addresses, which the page counted as blocked (2026-10-29).
+    table = []
+    if block and 'r' in block.group(1):
+        table = [line.strip() for line in run([PFCTL, '-t', TABLE, '-T', 'show']).splitlines() if line.strip()]
 
     print(json.dumps({
         'enabled': enabled,

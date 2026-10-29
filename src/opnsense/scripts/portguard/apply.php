@@ -10,7 +10,7 @@
  * firewall's ARP and NDP tables (or its host discovery) have seen that device use, and keeps them
  * current; plugins.inc.d/portguard.inc blocks that table both ways. With no device listed, or the
  * plugin off, the alias is removed - unless something else in config.xml still names it, when it is
- * left switched off.
+ * left switched off - and pf's table of it emptied.
  *
  * Then the rest of what puts the list into the firewall, here rather than in the page's controller,
  * so `configctl portguard apply` does the whole job (2026-10-29: alone it wrote the alias and put no
@@ -85,6 +85,15 @@ if (!empty($messages)) {
 }
 $model->serializeToConfig();
 Config::getInstance()->save();
+
+if (empty($macs)) {
+    /*
+     * pf's table outlives its alias: after the last device was removed it went on holding the
+     * addresses (2026-10-29), no rule using it, and the page counted them as blocked. Emptied, it holds
+     * nothing a rule could use again.
+     */
+    exec('/sbin/pfctl -t ' . NAME . ' -T flush 2>&1');
+}
 
 /* the order Firewall: Aliases and the page's Apply always used: the filter, its template, the aliases */
 $backend = new Backend();
