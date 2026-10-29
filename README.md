@@ -83,9 +83,27 @@ On the first XGS 3300, 2026-10-25, OPNsense 26.7.7 with os-xgs-npu installed, be
 - its menu place: under **XGS** with os-xgs-npu installed; in its own section, **Firewall**, when
   os-xgs-npu's menu file was set aside, and back under XGS when it was put back (`place-menu.sh`).
 
-Not tested: `apply.php` writing the alias (it saves config.xml), a device blocked, ~~the page in a
-browser~~ (opened on 2026-10-25, above), the package (built by `tools/make-package.sh`, added with
-pkg), and an install on a plain OPNsense, without os-xgs-npu.
+On a plain OPNsense 26.7 in qemu, 2026-10-29: the nano image with nothing of os-xgs-npu on it. The
+device on its LAN was qemu's own gateway there, 192.168.1.2, through which the host's web server
+answers. It was listed by its MAC address through the plugin's model and applied the way the page's
+Apply does: `configctl portguard apply`, then `filter reload skip_alias`, `template reload
+OPNsense/Filter` and `filter refresh_aliases`.
+
+- **The package.** `os-portguard-1.0.0.pkg` and `SHA256SUMS` were fetched from the release and the
+  sum checked OK. `pkg add` returned 0, and the page is under Firewall > Port Guard.
+- **The alias.** apply answered `portguard_blocked: added, 1 device(s)`, and OPNsense resolved the
+  MAC address to 192.168.1.2. The rules are not in pf after apply alone; the page's filter reload is
+  what puts them there.
+- **The rules.** pf holds `block drop in quick from <portguard_blocked>` and `block drop out quick
+  to <portguard_blocked>`, for inet and for inet6.
+- **A device blocked.** The web server was reached before; while the device was listed it was not
+  reached; and once the device was removed and applied again, it was reached again.
+
+Not tested: ~~`apply.php` writing the alias (it saves config.xml), a device blocked~~ (on 2026-10-29
+in qemu, above), ~~the page in a browser~~ (opened on 2026-10-25, above), ~~the package (built by
+`tools/make-package.sh`, added with pkg), and an install on a plain OPNsense, without os-xgs-npu~~
+(on 2026-10-29 in qemu, above). Still not: a device that is a separate machine on the LAN, and a
+device that changes its MAC address.
 
 ## Installation
 
