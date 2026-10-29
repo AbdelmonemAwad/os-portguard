@@ -137,10 +137,14 @@ It is not in the OPNsense plugin repository, so there is no `pkg install os-port
 sh install/install.sh
 ```
 
-It copies `src/` onto `/usr/local` (the rules hook with it), checks the PHP and the rules hook with
-`php -l` and the Python with `py_compile`, puts the page in the menu (`place-menu.sh`: XGS with
-os-xgs-npu, Firewall without) and records the commit for the self-update. Safe to run again: the
-settings in config.xml are kept. Nothing is blocked until a device is listed and applied.
+It ~~copies `src/` onto `/usr/local` (the rules hook with it), checks the PHP and the rules hook with
+`php -l` and the Python with `py_compile`,~~ checks the PHP and the rules hook with `php -l` and the
+Python with `py_compile` before anything is copied (since 2026-10-29: checked after the copy, a hook
+with an error stayed where every filter reload includes it), then copies `src/` onto `/usr/local`
+(the rules hook and, since 2026-10-29, the cron entry for the cut with it), puts the page in the menu
+(`place-menu.sh`: XGS with os-xgs-npu, Firewall without) and records the commit for the self-update.
+Safe to run again: the settings in config.xml are kept. Nothing is blocked until a device is listed
+and applied.
 `sh install/uninstall.sh` removes the plugin and its rules; the `portguard_blocked` alias stays in
 Firewall: Aliases, blocking nothing.
 
