@@ -148,6 +148,13 @@ and applied.
 `sh install/uninstall.sh` removes the plugin and its rules; the `portguard_blocked` alias stays in
 Firewall: Aliases, blocking nothing.
 
+**Before removing it**, turn **Enabled** off and **Apply** to take the alias away as well: the Apply
+removes it (switches it off instead when a rule of the owner's names it) and empties its pf table.
+The removal itself, by the script or by pkg, stops a cut that is running, deletes what the cut kept in
+`/var/db/os-portguard`, and empties the blocked devices' pf table when its alias is gone and no rule
+uses it - a table outlives its alias, and went on holding the addresses (all of this since
+2026-10-29).
+
 **From a release's package.** A release carries `os-portguard-<version>.pkg` and `SHA256SUMS`,
 built by `tools/make-package.sh` in the release workflow; installing it has not been tested yet.
 Check it and read it before adding it, as root:
@@ -159,8 +166,9 @@ pkg add os-portguard-1.0.0.pkg
 ```
 
 `pkg delete os-portguard` takes the rules hook with the files and reloads the filter, so the rules
-leave pf; the settings and the `portguard_blocked` alias stay, blocking nothing. The same package is
-built on the firewall from a checkout with `sh tools/make-package.sh -o /tmp`.
+leave pf; the settings and the `portguard_blocked` alias stay, blocking nothing (see **Before removing
+it**, above). The same package is built on the firewall from a checkout with
+`sh tools/make-package.sh -o /tmp`.
 
 ## Updates
 
