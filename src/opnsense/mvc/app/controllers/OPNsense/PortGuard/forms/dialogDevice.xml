@@ -17,7 +17,7 @@
         <id>device.mac</id>
         <label>MAC address</label>
         <type>text</type>
-        <help>The device's MAC address, 02:00:00:aa:bb:cc - or its first three to five bytes, to block every device of one maker. A device that changes its address (private Wi-Fi addresses do) is blocked only under the one listed.</help>
+        <help>A whole MAC address, 02:00:00:aa:bb:cc - or its first three to five bytes, to block every device of one maker. A device that changes its address (private Wi-Fi addresses do) is blocked only under the one listed.</help>
     </field>
     <field>
         <id>device.description</id>

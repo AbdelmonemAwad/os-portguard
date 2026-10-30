@@ -1,6 +1,22 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/readme/banner-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/readme/banner-light.svg">
+  <img src="docs/images/readme/banner-light.svg" alt="os-portguard - Devices blocked by their MAC address" width="100%">
+</picture>
+
 # Port Guard for OPNsense
 
-Layer 2 rules for the ports of the firewall: a device allowed or blocked inside the network by its MAC address or by the type of frame it sends, before the IP rules see it - and, on a Sophos XGS, in its switch where the switch can enforce them.
+[![release](https://img.shields.io/github/v/release/AbdelmonemAwad/os-portguard?sort=semver&style=flat-square&color=555555)](https://github.com/AbdelmonemAwad/os-portguard/releases/latest)
+[![checks](https://github.com/AbdelmonemAwad/os-portguard/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/AbdelmonemAwad/os-portguard/actions/workflows/checks.yml)
+[![licence: BSD-2-Clause](https://img.shields.io/badge/licence-BSD--2--Clause-blue.svg?style=flat-square)](LICENSE)
+[![OPNsense 26.7](https://img.shields.io/badge/OPNsense-26.7-d94f00.svg?style=flat-square)](#what-is-tested)
+[![part of os-xgs-npu](https://img.shields.io/badge/part%20of-os--xgs--npu-9a6700.svg?style=flat-square)](https://github.com/AbdelmonemAwad/os-xgs-npu)
+
+[![listed device: blocked both ways](https://img.shields.io/badge/listed%20device-blocked%20both%20ways-brightgreen.svg?style=flat-square)](#what-is-tested)
+[![MAC change: blocked again in 22 s, by a 4-byte prefix](https://img.shields.io/badge/MAC%20change-blocked%20again%20in%2022%20s%2C%20by%20a%204--byte%20prefix-brightgreen.svg?style=flat-square)](#what-is-tested)
+[![Ethernet rules · switch: not yet](https://img.shields.io/badge/Ethernet%20rules%20%C2%B7%20switch-not%20yet-lightgrey.svg?style=flat-square)](#not-yet-and-why)
+
+~~Layer 2 rules for the ports of the firewall: a device allowed or blocked inside the network by its MAC address or by the type of frame it sends, before the IP rules see it - and, on a Sophos XGS, in its switch where the switch can enforce them.~~ A device inside the network blocked by its MAC address - or every device of one maker, by the first bytes of the address - at the firewall: OPNsense resolves the addresses listed into the IP addresses the devices use, and the firewall's IP rules block those. Not done (2026-10-29): allowing only the devices listed, which is not written; and matching a frame by its type or blocking in an XGS's switch - see [Not yet, and why](#not-yet-and-why).
 
 > ~~**Planned - nothing here runs yet.** This repository was opened on 2026-10-22 to hold
 > Port Guard as a plugin of its own. No code has been written or moved into it, and there is no
@@ -10,6 +26,9 @@ Layer 2 rules for the ports of the firewall: a device allowed or blocked inside 
 > firewall. There is no release, and it has not been installed on an appliance yet. What was run is
 > listed under [What is tested](#what-is-tested); what the rest needs is under
 > [Not yet, and why](#not-yet-and-why).~~
+>
+> **1.0.1 (2026-10-30):** a device listed loses its open connections, `configctl portguard apply` does the whole job, the table emptied when no device is left, and a removal that leaves nothing behind. Tested in qemu on OPNsense 26.7.7 before the release; see
+> [What is tested](#what-is-tested).
 >
 > **1.0.0, the first release (2026-10-25): the first part**, a device blocked by its MAC address at
 > the firewall. Installed and its page opened on an XGS 3300 (OPNsense 26.7.7) before the release;
@@ -30,6 +49,12 @@ Layer 2 rules for the ports of the firewall: a device allowed or blocked inside 
   os-crowdsec does): nothing from a listed device passes the firewall, on any interface, and nothing
   reaches it through the firewall. They come before the interface rules, the anti-lockout rule
   included, and are never added to the owner's own rules;
+- **open connections cut** - a rule stops new connections only. The connections a listed device
+  already has open are cut when Apply puts it into the firewall, and every minute those to or from
+  an address the alias has just gained (`cut.py`, from a cron entry); always on. On an XGS,
+  os-xgs-npu's drivers take a connection out of the coprocessor once pf no longer holds its state.
+  Written on 2026-10-29, after the tests below - until then nothing cut a connection already open,
+  and it went on - and not yet tested;
 - **devices seen** - the devices the firewall has seen in the last day, with their interface,
   address and maker, each a click from being blocked; the cards say how many listed devices are
   present and how many addresses pf blocks now.
@@ -51,8 +76,13 @@ ruleset, so a plugin cannot add them without a change to OPNsense itself. Until 
   traffic routed between two front ports meets the firewall's rules
   ([os-xgs-npu's measurement](https://github.com/AbdelmonemAwad/os-xgs-npu/blob/main/docs/measurements/frontports-2026-10-25.md));
 - **a frame type** (an EtherType) cannot be matched at all;
-- **a device that changes its MAC address** (private Wi-Fi addresses) is blocked only under the one
-  listed.
+- **a device that changes its MAC address** (private Wi-Fi addresses) is blocked ~~only under the one
+  listed~~ under the one listed, and - measured on 2026-10-29 in qemu, see
+  [What is tested](#what-is-tested) - under the IPv4 address it used with it, for as long as
+  OPNsense's host discovery holds the two together: one that took another MAC address but kept its
+  IPv4 address stayed blocked, through nine minutes and a refresh of the aliases; with a new IPv4
+  address as well it was reached at once. Not measured: by the same holding, another device given
+  that IPv4 address afterwards would be blocked too, until the old pair is let go.
 
 ~~on a Sophos XGS, the rules the 88E6193X switch can hold, kept in the switch, so a blocked device is
 stopped at the port~~ - still the aim, not written: the XGS 136's and 3300's front ports are on the
@@ -94,7 +124,8 @@ OPNsense/Filter` and `filter refresh_aliases`.
   sum checked OK. `pkg add` returned 0, and the page is under Firewall > Port Guard.
 - **The alias.** apply answered `portguard_blocked: added, 1 device(s)`, and OPNsense resolved the
   MAC address to 192.168.1.2. The rules are not in pf after apply alone; the page's filter reload is
-  what puts them there.
+  what puts them there. (Since 2026-10-29 `configctl portguard apply` runs those reloads itself, as
+  the page's Apply now does through it; not yet tested.)
 - **The rules.** pf holds `block drop in quick from <portguard_blocked>` and `block drop out quick
   to <portguard_blocked>`, for inet and for inet6.
 - **A device blocked.** The web server was reached before; while the device was listed it was not
@@ -104,7 +135,9 @@ OPNsense/Filter` and `filter refresh_aliases`.
   from the ARP table, and applied the same way. Before, each machine reached the other (ping). While
   it was listed, the alias resolved to the second machine's address, pf held the four rules, and
   neither reached the other. Once it was removed and applied again, both did again. pf's table kept
-  the address after the last device was removed, but no rule referred to it then.
+  the address after the last device was removed, but no rule referred to it then. (Since 2026-10-29
+  the Apply empties the table when no device is left, and the page counts its addresses only while
+  a rule uses it; not yet tested.)
 - **A device that changes its MAC address.** The second machine, listed by its whole address, took
   another one and kept its IPv4 address: it stayed blocked. OPNsense's host discovery still held the
   listed address with that IPv4 address, so the alias kept it - through nine minutes and a refresh
@@ -120,6 +153,13 @@ in qemu, above), ~~the page in a browser~~ (opened on 2026-10-25, above), ~~the 
 second machine, on an interface of its own, on 2026-10-29 in qemu, above), ~~and a device that changes
 its MAC address~~ (on 2026-10-29 in qemu, above).
 
+Written after the tests above and not yet tested (2026-10-29): the cut of the connections a listed
+device already has open, at Apply and every minute; `configctl portguard apply` doing the whole of
+the page's Apply; the table emptied when no device is left, and the page's addresses counted only
+while a rule uses the table; the cards counting devices rather than addresses, and the Block
+button's answer; the checks before the copy; and the removal's stopping of a running cut, its
+deleting of the state and its emptying of a stale table.
+
 ## Installation
 
 It is not in the OPNsense plugin repository, so there is no `pkg install os-portguard`.
@@ -130,26 +170,39 @@ It is not in the OPNsense plugin repository, so there is no `pkg install os-port
 sh install/install.sh
 ```
 
-It copies `src/` onto `/usr/local` (the rules hook with it), checks the PHP and the rules hook with
-`php -l` and the Python with `py_compile`, puts the page in the menu (`place-menu.sh`: XGS with
-os-xgs-npu, Firewall without) and records the commit for the self-update. Safe to run again: the
-settings in config.xml are kept. Nothing is blocked until a device is listed and applied.
+It ~~copies `src/` onto `/usr/local` (the rules hook with it), checks the PHP and the rules hook with
+`php -l` and the Python with `py_compile`,~~ checks the PHP and the rules hook with `php -l` and the
+Python with `py_compile` before anything is copied (since 2026-10-29: checked after the copy, a hook
+with an error stayed where every filter reload includes it), then copies `src/` onto `/usr/local`
+(the rules hook and, since 2026-10-29, the cron entry for the cut with it), puts the page in the menu
+(`place-menu.sh`: XGS with os-xgs-npu, Firewall without) and records the commit for the self-update.
+Safe to run again: the settings in config.xml are kept. Nothing is blocked until a device is listed
+and applied.
 `sh install/uninstall.sh` removes the plugin and its rules; the `portguard_blocked` alias stays in
 Firewall: Aliases, blocking nothing.
 
+**Before removing it**, turn **Enabled** off and **Apply** to take the alias away as well: the Apply
+removes it (switches it off instead when a rule of the owner's names it) and empties its pf table.
+The removal itself, by the script or by pkg, stops a cut that is running, deletes what the cut kept in
+`/var/db/os-portguard`, and empties the blocked devices' pf table when its alias is gone and no rule
+uses it - a table outlives its alias, and went on holding the addresses (all of this since
+2026-10-29).
+
 **From a release's package.** A release carries `os-portguard-<version>.pkg` and `SHA256SUMS`,
-built by `tools/make-package.sh` in the release workflow; installing it has not been tested yet.
+built by `tools/make-package.sh` in the release workflow; ~~installing it has not been tested yet~~
+it was added with pkg on a plain OPNsense on 2026-10-29 - see [What is tested](#what-is-tested).
 Check it and read it before adding it, as root:
 
 ```sh
 sha256sum -c SHA256SUMS
-pkg info -lF os-portguard-1.0.0.pkg      # every file it will write
-pkg add os-portguard-1.0.0.pkg
+pkg info -lF os-portguard-*.pkg       # every file it will write
+pkg add os-portguard-*.pkg
 ```
 
 `pkg delete os-portguard` takes the rules hook with the files and reloads the filter, so the rules
-leave pf; the settings and the `portguard_blocked` alias stay, blocking nothing. The same package is
-built on the firewall from a checkout with `sh tools/make-package.sh -o /tmp`.
+leave pf; the settings and the `portguard_blocked` alias stay, blocking nothing (see **Before removing
+it**, above). The same package is built on the firewall from a checkout with
+`sh tools/make-package.sh -o /tmp`.
 
 ## Updates
 

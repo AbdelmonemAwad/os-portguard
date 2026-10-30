@@ -6,30 +6,40 @@
 # Install the Port Guard plugin from a copy of this repository on the firewall:
 #   sh install/install.sh
 # Safe to run again after an update: settings in config.xml are kept. Nothing is blocked until a
-# device is listed on the page and applied.
+# device is listed on the page and applied; the cron entry's cut does nothing until then either.
 
 set -e
 HERE=$(cd "$(dirname "$0")/.." && pwd)
+
+# Syntax first, on the tree about to be copied, so nothing with an error is ever copied (2026-10-29):
+# checked after the copy, a rules hook with an error stayed in plugins.inc.d when its check failed,
+# where every filter reload includes it - and stops at it. The Python is compiled into a directory
+# of its own, removed after, not beside the tree's files.
+for f in $(find "${HERE}/src" -name '*.php' -o -name '*.inc'); do
+    php -l "$f" > /dev/null
+done
+PYC=$(mktemp -d -t os-portguard-check)
+trap 'rm -rf "${PYC}"' EXIT
+for f in $(find "${HERE}/src" -name '*.py'); do
+    PYTHONPYCACHEPREFIX="${PYC}" python3 -m py_compile "$f"
+done
+rm -rf "${PYC}"
+trap - EXIT
 
 # plugin files: src/ maps to /usr/local
 cp -R "${HERE}/src/" /usr/local/
 chmod 755 /usr/local/opnsense/scripts/portguard/*.py /usr/local/opnsense/scripts/portguard/apply.php \
     /usr/local/opnsense/scripts/portguard/place-menu.sh
 chmod 644 /usr/local/opnsense/scripts/portguard/i18n/ui/source.json
-chmod 644 /usr/local/etc/inc/plugins.inc.d/portguard.inc
+chmod 644 /usr/local/etc/cron.d/portguard /usr/local/etc/inc/plugins.inc.d/portguard.inc
 chmod 644 /usr/local/opnsense/service/conf/actions.d/actions_portguard.conf
-
-# syntax check before anything is reloaded
-for f in $(find "${HERE}/src" -name '*.php' -o -name '*.inc'); do
-    php -l "$f" > /dev/null
-done
-for f in /usr/local/opnsense/scripts/portguard/*.py; do
-    python3 -m py_compile "$f"
-done
 
 # The page's place in the menu: the XGS section where os-xgs-npu is installed, Firewall where it is
 # not. place-menu.sh writes the menu file and says which it chose: "xgs" or "own".
 WHERE=$(/usr/local/opnsense/scripts/portguard/place-menu.sh)
+
+# where cut.py keeps what the blocked devices' table held at its last run
+install -d -o root -g wheel -m 0750 /var/db/os-portguard
 
 # reload configd actions, menu and ACL caches; the filter, so the rules hook is read
 service configd restart > /dev/null

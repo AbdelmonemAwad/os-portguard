@@ -12,6 +12,16 @@ those needs the switch.
 Plugin Changelog
 ================
 
+1.0.1
+
+* a device listed loses the connections it already has open: cut at Apply and every minute
+* configctl portguard apply does the whole job: the alias, the filter, the aliases, the cut
+* the table emptied when no device is left; the page counts devices, and only what a rule blocks
+* the Block button shows why a device was refused
+* the rules hook is checked by php -l, before the installer copies it
+* removal stops its cut, deletes its state and empties its table
+* the page's menu entry carries an icon in the XGS section, and a Font Awesome 6 one in its own
+
 1.0.0
 
 * Initial release

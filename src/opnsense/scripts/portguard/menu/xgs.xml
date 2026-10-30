@@ -13,6 +13,6 @@
         Menu/Menu.xml.
     -->
     <XGS VisibleName="XGS" cssClass="fa fa-microchip fa-fw" order="35">
-        <PortGuard order="56" VisibleName="Port Guard" url="/ui/portguard"/>
+        <PortGuard order="56" VisibleName="Port Guard" cssClass="fa fa-shield-halved fa-fw" url="/ui/portguard"/>
     </XGS>
 </menu>
