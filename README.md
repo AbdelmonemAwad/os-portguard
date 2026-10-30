@@ -4,17 +4,20 @@
   <img src="docs/images/readme/banner-light.svg" alt="os-portguard - Devices blocked by their MAC address" width="100%">
 </picture>
 
+<p align="center">
+  <a href="https://github.com/AbdelmonemAwad/os-portguard/releases/latest"><img alt="the newest release" src="https://img.shields.io/github/v/release/AbdelmonemAwad/os-portguard?sort=semver&amp;style=flat-square&amp;label=release&amp;color=8250df"></a>
+  <a href="https://github.com/AbdelmonemAwad/os-portguard/actions/workflows/checks.yml"><img alt="checks on main" src="https://img.shields.io/github/actions/workflow/status/AbdelmonemAwad/os-portguard/checks.yml?branch=main&amp;style=flat-square&amp;label=checks"></a>
+  <a href="LICENSE"><img alt="licence: BSD-2-Clause" src="https://img.shields.io/badge/licence-BSD--2--Clause-blue.svg?style=flat-square"></a>
+  <a href="#what-is-tested"><img alt="OPNsense 26.7" src="https://img.shields.io/badge/OPNsense-26.7-d94f00.svg?style=flat-square"></a>
+  <a href="https://github.com/AbdelmonemAwad/opnsense-arabic"><img alt="the page in English and in Arabic" src="https://img.shields.io/badge/GUI-English%20%C2%B7%20Arabic-2da44e.svg?style=flat-square"></a>
+  <a href="https://github.com/AbdelmonemAwad/os-xgs-npu"><img alt="part of os-xgs-npu" src="https://img.shields.io/badge/part%20of-os--xgs--npu-9a6700.svg?style=flat-square"></a>
+  <br>
+  <a href="#what-is-tested"><img alt="listed device: blocked both ways" src="https://img.shields.io/badge/listed%20device-blocked%20both%20ways-brightgreen.svg?style=flat-square"></a>
+  <a href="#what-is-tested"><img alt="MAC change: blocked again in 22 s, by a 4-byte prefix" src="https://img.shields.io/badge/MAC%20change-blocked%20again%20in%2022%20s%2C%20by%20a%204--byte%20prefix-brightgreen.svg?style=flat-square"></a>
+  <a href="#not-yet-and-why"><img alt="Ethernet rules · switch: not yet" src="https://img.shields.io/badge/Ethernet%20rules%20%C2%B7%20switch-not%20yet-lightgrey.svg?style=flat-square"></a>
+</p>
+
 # Port Guard for OPNsense
-
-[![release](https://img.shields.io/github/v/release/AbdelmonemAwad/os-portguard?sort=semver&style=flat-square&color=555555)](https://github.com/AbdelmonemAwad/os-portguard/releases/latest)
-[![checks](https://github.com/AbdelmonemAwad/os-portguard/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/AbdelmonemAwad/os-portguard/actions/workflows/checks.yml)
-[![licence: BSD-2-Clause](https://img.shields.io/badge/licence-BSD--2--Clause-blue.svg?style=flat-square)](LICENSE)
-[![OPNsense 26.7](https://img.shields.io/badge/OPNsense-26.7-d94f00.svg?style=flat-square)](#what-is-tested)
-[![part of os-xgs-npu](https://img.shields.io/badge/part%20of-os--xgs--npu-9a6700.svg?style=flat-square)](https://github.com/AbdelmonemAwad/os-xgs-npu)
-
-[![listed device: blocked both ways](https://img.shields.io/badge/listed%20device-blocked%20both%20ways-brightgreen.svg?style=flat-square)](#what-is-tested)
-[![MAC change: blocked again in 22 s, by a 4-byte prefix](https://img.shields.io/badge/MAC%20change-blocked%20again%20in%2022%20s%2C%20by%20a%204--byte%20prefix-brightgreen.svg?style=flat-square)](#what-is-tested)
-[![Ethernet rules · switch: not yet](https://img.shields.io/badge/Ethernet%20rules%20%C2%B7%20switch-not%20yet-lightgrey.svg?style=flat-square)](#not-yet-and-why)
 
 ~~Layer 2 rules for the ports of the firewall: a device allowed or blocked inside the network by its MAC address or by the type of frame it sends, before the IP rules see it - and, on a Sophos XGS, in its switch where the switch can enforce them.~~ A device inside the network blocked by its MAC address - or every device of one maker, by the first bytes of the address - at the firewall: OPNsense resolves the addresses listed into the IP addresses the devices use, and the firewall's IP rules block those. Not done (2026-10-29): allowing only the devices listed, which is not written; and matching a frame by its type or blocking in an XGS's switch - see [Not yet, and why](#not-yet-and-why).
 
@@ -27,8 +30,9 @@
 > listed under [What is tested](#what-is-tested); what the rest needs is under
 > [Not yet, and why](#not-yet-and-why).~~
 >
-> **1.0.1 (2026-10-30):** a device listed loses its open connections, `configctl portguard apply` does the whole job, the table emptied when no device is left, and a removal that leaves nothing behind. Tested in qemu on OPNsense 26.7.7 before the release; see
-> [What is tested](#what-is-tested).
+> **1.0.1 (2026-10-30):** a device listed loses its open connections, `configctl portguard apply` does the whole job, the table emptied when no device is left, and a removal that leaves nothing behind. ~~Tested in qemu on OPNsense 26.7.7 before the release; see~~ Tested in part before the
+> release, in qemu on OPNsense 26.7.7 from the branch that became it; what ran and what did not
+> is under [What is tested](#what-is-tested).
 >
 > **1.0.0, the first release (2026-10-25): the first part**, a device blocked by its MAC address at
 > the firewall. Installed and its page opened on an XGS 3300 (OPNsense 26.7.7) before the release;
@@ -36,6 +40,8 @@
 > gateway on the LAN, and a second machine (see [What is tested](#what-is-tested)). Updated from
 > XGS: Updates when os-xgs-npu is installed, or by its own self-update - see [Updates](#updates).
 > What the rest needs is under [Not yet, and why](#not-yet-and-why).
+
+<p align="center"><b>Contents:</b> <a href="#what-it-does">What it does</a> &middot; <a href="#not-yet-and-why">Not yet, and why</a> &middot; <a href="#what-is-tested">What is tested</a> &middot; <a href="#installation">Installation</a> &middot; <a href="#updates">Updates</a> &middot; <a href="#where-it-fits">Where it fits</a> &middot; <a href="#licence">Licence</a></p>
 
 ## What it does
 
@@ -54,7 +60,8 @@
   an address the alias has just gained (`cut.py`, from a cron entry); always on. On an XGS,
   os-xgs-npu's drivers take a connection out of the coprocessor once pf no longer holds its state.
   Written on 2026-10-29, after the tests below - until then nothing cut a connection already open,
-  and it went on - and not yet tested;
+  and it went on - and ~~not yet tested~~ tested at Apply that evening, in qemu (below); the cut
+  every minute not yet;
 - **devices seen** - the devices the firewall has seen in the last day, with their interface,
   address and maker, each a click from being blocked; the cards say how many listed devices are
   present and how many addresses pf blocks now.
@@ -125,19 +132,21 @@ OPNsense/Filter` and `filter refresh_aliases`.
 - **The alias.** apply answered `portguard_blocked: added, 1 device(s)`, and OPNsense resolved the
   MAC address to 192.168.1.2. The rules are not in pf after apply alone; the page's filter reload is
   what puts them there. (Since 2026-10-29 `configctl portguard apply` runs those reloads itself, as
-  the page's Apply now does through it; not yet tested.)
+  the page's Apply now does through it; ~~not yet tested~~ tested that evening, below.)
 - **The rules.** pf holds `block drop in quick from <portguard_blocked>` and `block drop out quick
   to <portguard_blocked>`, for inet and for inet6.
 - **A device blocked.** The web server was reached before; while the device was listed it was not
   reached; and once the device was removed and applied again, it was reached again.
-- **A separate machine.** A second such machine, a copy of the first, joined to it by a cable of
+- **A separate machine.** A second ~~such~~ machine, a copy of the first once it ran OPNsense 26.7.7 -
+  this test and the next ran on 26.7.7, not 26.7 - joined to it by a cable of
   their own - an interface of its own on each, not the LAN. It was listed by its MAC address, read
   from the ARP table, and applied the same way. Before, each machine reached the other (ping). While
   it was listed, the alias resolved to the second machine's address, pf held the four rules, and
   neither reached the other. Once it was removed and applied again, both did again. pf's table kept
   the address after the last device was removed, but no rule referred to it then. (Since 2026-10-29
   the Apply empties the table when no device is left, and the page counts its addresses only while
-  a rule uses it; not yet tested.)
+  a rule uses it; ~~not yet tested~~ the emptied table tested that evening, below, the count not
+  yet.)
 - **A device that changes its MAC address.** The second machine, listed by its whole address, took
   another one and kept its IPv4 address: it stayed blocked. OPNsense's host discovery still held the
   listed address with that IPv4 address, so the alias kept it - through nine minutes and a refresh
@@ -153,12 +162,30 @@ in qemu, above), ~~the page in a browser~~ (opened on 2026-10-25, above), ~~the 
 second machine, on an interface of its own, on 2026-10-29 in qemu, above), ~~and a device that changes
 its MAC address~~ (on 2026-10-29 in qemu, above).
 
-Written after the tests above and not yet tested (2026-10-29): the cut of the connections a listed
+Written after the tests above and ~~not yet tested~~ (2026-10-29), and tested in part that evening,
+below: the cut of the connections a listed
 device already has open, at Apply and every minute; `configctl portguard apply` doing the whole of
 the page's Apply; the table emptied when no device is left, and the page's addresses counted only
 while a rule uses the table; the cards counting devices rather than addresses, and the Block
 button's answer; the checks before the copy; and the removal's stopping of a running cut, its
 deleting of the state and its emptying of a stale table.
+
+1.0.1's branch, run on 2026-10-29 in qemu on OPNsense 26.7.7, before its release commit, with the
+second machine listed by its MAC address while it held a TLS connection open:
+
+- **Open connections cut at Apply.** Apply answered `portguard_blocked: 2 new addresses of 2, 2 open
+  connections cut`, and the connection held open got no answer from then on; before the device was
+  listed, it was answered.
+- **`configctl portguard apply` alone.** pf then held the table with the device's two addresses and
+  the four rules, and no state with the device was left.
+- **The table emptied.** With the device removed and applied again, the table was empty and no rule
+  named it.
+- **The removal.** Nothing was left: no cron entry, no state, no cut process, an empty table - but the
+  table was empty already and no cut was running, so its stopping of a running cut and its emptying
+  of a stale table were not exercised, and `pkg delete` was not run.
+
+Still not tested: the cut every minute, the page's addresses counted only while a rule uses the
+table, the cards and the Block button's answer, and the checks before the copy.
 
 ## Installation
 
@@ -226,13 +253,15 @@ firewall when it is released, not before.
 - `self-update.py check` says what it would do and changes nothing.
 
 ~~Not tested yet: an update taken this way - 1.0.0 is the first release, so none has been ahead of
-an installed copy.~~ Tested on 2026-10-29 on a plain OPNsense 26.7 in qemu, where the package had
+an installed copy.~~ Tested on 2026-10-29 on a plain OPNsense ~~26.7~~ 26.7.7 in qemu, where the package had
 been added with pkg, which records no commit: `self-update.py check` found the release `v1.0.0`
 (5353a6423145) and nothing installed to compare it with, so to be taken. `self-update.py` fetched
 its source, ran its `install/install.sh` and answered `updated to v1.0.0 (5353a6423145)`, which the
 system log has too. `installed.json` then recorded that commit, from the stamp, and a second check
-found it identical: nothing to take. Not yet: a release ahead of the one installed - 1.0.0 is
-still the only release.
+found it identical: nothing to take. ~~Not yet: a release ahead of the one installed - 1.0.0 is
+still the only release.~~ Taken on 2026-10-30, on an XGS 3300 with OPNsense 26.7.7: with 1.0.0
+installed, `self-update.py`, run over SSH, answered `updated to v1.0.1 (8498e3f5f64a)`, the system
+log carries the same line, and `installed.json` recorded that commit.
 
 ## Where it fits
 
