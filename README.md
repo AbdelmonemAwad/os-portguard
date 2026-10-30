@@ -30,8 +30,9 @@
 > listed under [What is tested](#what-is-tested); what the rest needs is under
 > [Not yet, and why](#not-yet-and-why).~~
 >
-> **1.0.1 (2026-10-30):** a device listed loses its open connections, `configctl portguard apply` does the whole job, the table emptied when no device is left, and a removal that leaves nothing behind. Tested in qemu on OPNsense 26.7.7 before the release; see
-> [What is tested](#what-is-tested).
+> **1.0.1 (2026-10-30):** a device listed loses its open connections, `configctl portguard apply` does the whole job, the table emptied when no device is left, and a removal that leaves nothing behind. ~~Tested in qemu on OPNsense 26.7.7 before the release; see~~ Tested in part before the
+> release, in qemu on OPNsense 26.7.7 from the branch that became it; what ran and what did not
+> is under [What is tested](#what-is-tested).
 >
 > **1.0.0, the first release (2026-10-25): the first part**, a device blocked by its MAC address at
 > the firewall. Installed and its page opened on an XGS 3300 (OPNsense 26.7.7) before the release;
@@ -59,7 +60,8 @@
   an address the alias has just gained (`cut.py`, from a cron entry); always on. On an XGS,
   os-xgs-npu's drivers take a connection out of the coprocessor once pf no longer holds its state.
   Written on 2026-10-29, after the tests below - until then nothing cut a connection already open,
-  and it went on - and not yet tested;
+  and it went on - and ~~not yet tested~~ tested at Apply that evening, in qemu (below); the cut
+  every minute not yet;
 - **devices seen** - the devices the firewall has seen in the last day, with their interface,
   address and maker, each a click from being blocked; the cards say how many listed devices are
   present and how many addresses pf blocks now.
@@ -130,19 +132,21 @@ OPNsense/Filter` and `filter refresh_aliases`.
 - **The alias.** apply answered `portguard_blocked: added, 1 device(s)`, and OPNsense resolved the
   MAC address to 192.168.1.2. The rules are not in pf after apply alone; the page's filter reload is
   what puts them there. (Since 2026-10-29 `configctl portguard apply` runs those reloads itself, as
-  the page's Apply now does through it; not yet tested.)
+  the page's Apply now does through it; ~~not yet tested~~ tested that evening, below.)
 - **The rules.** pf holds `block drop in quick from <portguard_blocked>` and `block drop out quick
   to <portguard_blocked>`, for inet and for inet6.
 - **A device blocked.** The web server was reached before; while the device was listed it was not
   reached; and once the device was removed and applied again, it was reached again.
-- **A separate machine.** A second such machine, a copy of the first, joined to it by a cable of
+- **A separate machine.** A second ~~such~~ machine, a copy of the first once it ran OPNsense 26.7.7 -
+  this test and the next ran on 26.7.7, not 26.7 - joined to it by a cable of
   their own - an interface of its own on each, not the LAN. It was listed by its MAC address, read
   from the ARP table, and applied the same way. Before, each machine reached the other (ping). While
   it was listed, the alias resolved to the second machine's address, pf held the four rules, and
   neither reached the other. Once it was removed and applied again, both did again. pf's table kept
   the address after the last device was removed, but no rule referred to it then. (Since 2026-10-29
   the Apply empties the table when no device is left, and the page counts its addresses only while
-  a rule uses it; not yet tested.)
+  a rule uses it; ~~not yet tested~~ the emptied table tested that evening, below, the count not
+  yet.)
 - **A device that changes its MAC address.** The second machine, listed by its whole address, took
   another one and kept its IPv4 address: it stayed blocked. OPNsense's host discovery still held the
   listed address with that IPv4 address, so the alias kept it - through nine minutes and a refresh
@@ -158,12 +162,30 @@ in qemu, above), ~~the page in a browser~~ (opened on 2026-10-25, above), ~~the 
 second machine, on an interface of its own, on 2026-10-29 in qemu, above), ~~and a device that changes
 its MAC address~~ (on 2026-10-29 in qemu, above).
 
-Written after the tests above and not yet tested (2026-10-29): the cut of the connections a listed
+Written after the tests above and ~~not yet tested~~ (2026-10-29), and tested in part that evening,
+below: the cut of the connections a listed
 device already has open, at Apply and every minute; `configctl portguard apply` doing the whole of
 the page's Apply; the table emptied when no device is left, and the page's addresses counted only
 while a rule uses the table; the cards counting devices rather than addresses, and the Block
 button's answer; the checks before the copy; and the removal's stopping of a running cut, its
 deleting of the state and its emptying of a stale table.
+
+1.0.1's branch, run on 2026-10-29 in qemu on OPNsense 26.7.7, before its release commit, with the
+second machine listed by its MAC address while it held a TLS connection open:
+
+- **Open connections cut at Apply.** Apply answered `portguard_blocked: 2 new addresses of 2, 2 open
+  connections cut`, and the connection held open got no answer from then on; before the device was
+  listed, it was answered.
+- **`configctl portguard apply` alone.** pf then held the table with the device's two addresses and
+  the four rules, and no state with the device was left.
+- **The table emptied.** With the device removed and applied again, the table was empty and no rule
+  named it.
+- **The removal.** Nothing was left: no cron entry, no state, no cut process, an empty table - but the
+  table was empty already and no cut was running, so its stopping of a running cut and its emptying
+  of a stale table were not exercised, and `pkg delete` was not run.
+
+Still not tested: the cut every minute, the page's addresses counted only while a rule uses the
+table, the cards and the Block button's answer, and the checks before the copy.
 
 ## Installation
 
@@ -231,7 +253,7 @@ firewall when it is released, not before.
 - `self-update.py check` says what it would do and changes nothing.
 
 ~~Not tested yet: an update taken this way - 1.0.0 is the first release, so none has been ahead of
-an installed copy.~~ Tested on 2026-10-29 on a plain OPNsense 26.7 in qemu, where the package had
+an installed copy.~~ Tested on 2026-10-29 on a plain OPNsense ~~26.7~~ 26.7.7 in qemu, where the package had
 been added with pkg, which records no commit: `self-update.py check` found the release `v1.0.0`
 (5353a6423145) and nothing installed to compare it with, so to be taken. `self-update.py` fetched
 its source, ran its `install/install.sh` and answered `updated to v1.0.0 (5353a6423145)`, which the
