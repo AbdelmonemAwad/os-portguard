@@ -4,17 +4,20 @@
   <img src="docs/images/readme/banner-light.svg" alt="os-portguard - Devices blocked by their MAC address" width="100%">
 </picture>
 
+<p align="center">
+  <a href="https://github.com/AbdelmonemAwad/os-portguard/releases/latest"><img alt="the newest release" src="https://img.shields.io/github/v/release/AbdelmonemAwad/os-portguard?sort=semver&amp;style=flat-square&amp;label=release&amp;color=8250df"></a>
+  <a href="https://github.com/AbdelmonemAwad/os-portguard/actions/workflows/checks.yml"><img alt="checks on main" src="https://img.shields.io/github/actions/workflow/status/AbdelmonemAwad/os-portguard/checks.yml?branch=main&amp;style=flat-square&amp;label=checks"></a>
+  <a href="LICENSE"><img alt="licence: BSD-2-Clause" src="https://img.shields.io/badge/licence-BSD--2--Clause-blue.svg?style=flat-square"></a>
+  <a href="#what-is-tested"><img alt="OPNsense 26.7" src="https://img.shields.io/badge/OPNsense-26.7-d94f00.svg?style=flat-square"></a>
+  <a href="https://github.com/AbdelmonemAwad/opnsense-arabic"><img alt="the page in English and in Arabic" src="https://img.shields.io/badge/GUI-English%20%C2%B7%20Arabic-2da44e.svg?style=flat-square"></a>
+  <a href="https://github.com/AbdelmonemAwad/os-xgs-npu"><img alt="part of os-xgs-npu" src="https://img.shields.io/badge/part%20of-os--xgs--npu-9a6700.svg?style=flat-square"></a>
+  <br>
+  <a href="#what-is-tested"><img alt="listed device: blocked both ways" src="https://img.shields.io/badge/listed%20device-blocked%20both%20ways-brightgreen.svg?style=flat-square"></a>
+  <a href="#what-is-tested"><img alt="MAC change: blocked again in 22 s, by a 4-byte prefix" src="https://img.shields.io/badge/MAC%20change-blocked%20again%20in%2022%20s%2C%20by%20a%204--byte%20prefix-brightgreen.svg?style=flat-square"></a>
+  <a href="#not-yet-and-why"><img alt="Ethernet rules · switch: not yet" src="https://img.shields.io/badge/Ethernet%20rules%20%C2%B7%20switch-not%20yet-lightgrey.svg?style=flat-square"></a>
+</p>
+
 # Port Guard for OPNsense
-
-[![release](https://img.shields.io/github/v/release/AbdelmonemAwad/os-portguard?sort=semver&style=flat-square&color=555555)](https://github.com/AbdelmonemAwad/os-portguard/releases/latest)
-[![checks](https://github.com/AbdelmonemAwad/os-portguard/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/AbdelmonemAwad/os-portguard/actions/workflows/checks.yml)
-[![licence: BSD-2-Clause](https://img.shields.io/badge/licence-BSD--2--Clause-blue.svg?style=flat-square)](LICENSE)
-[![OPNsense 26.7](https://img.shields.io/badge/OPNsense-26.7-d94f00.svg?style=flat-square)](#what-is-tested)
-[![part of os-xgs-npu](https://img.shields.io/badge/part%20of-os--xgs--npu-9a6700.svg?style=flat-square)](https://github.com/AbdelmonemAwad/os-xgs-npu)
-
-[![listed device: blocked both ways](https://img.shields.io/badge/listed%20device-blocked%20both%20ways-brightgreen.svg?style=flat-square)](#what-is-tested)
-[![MAC change: blocked again in 22 s, by a 4-byte prefix](https://img.shields.io/badge/MAC%20change-blocked%20again%20in%2022%20s%2C%20by%20a%204--byte%20prefix-brightgreen.svg?style=flat-square)](#what-is-tested)
-[![Ethernet rules · switch: not yet](https://img.shields.io/badge/Ethernet%20rules%20%C2%B7%20switch-not%20yet-lightgrey.svg?style=flat-square)](#not-yet-and-why)
 
 ~~Layer 2 rules for the ports of the firewall: a device allowed or blocked inside the network by its MAC address or by the type of frame it sends, before the IP rules see it - and, on a Sophos XGS, in its switch where the switch can enforce them.~~ A device inside the network blocked by its MAC address - or every device of one maker, by the first bytes of the address - at the firewall: OPNsense resolves the addresses listed into the IP addresses the devices use, and the firewall's IP rules block those. Not done (2026-10-29): allowing only the devices listed, which is not written; and matching a frame by its type or blocking in an XGS's switch - see [Not yet, and why](#not-yet-and-why).
 
@@ -36,6 +39,8 @@
 > gateway on the LAN, and a second machine (see [What is tested](#what-is-tested)). Updated from
 > XGS: Updates when os-xgs-npu is installed, or by its own self-update - see [Updates](#updates).
 > What the rest needs is under [Not yet, and why](#not-yet-and-why).
+
+<p align="center"><b>Contents:</b> <a href="#what-it-does">What it does</a> &middot; <a href="#not-yet-and-why">Not yet, and why</a> &middot; <a href="#what-is-tested">What is tested</a> &middot; <a href="#installation">Installation</a> &middot; <a href="#updates">Updates</a> &middot; <a href="#where-it-fits">Where it fits</a> &middot; <a href="#licence">Licence</a></p>
 
 ## What it does
 
@@ -231,8 +236,10 @@ been added with pkg, which records no commit: `self-update.py check` found the r
 (5353a6423145) and nothing installed to compare it with, so to be taken. `self-update.py` fetched
 its source, ran its `install/install.sh` and answered `updated to v1.0.0 (5353a6423145)`, which the
 system log has too. `installed.json` then recorded that commit, from the stamp, and a second check
-found it identical: nothing to take. Not yet: a release ahead of the one installed - 1.0.0 is
-still the only release.
+found it identical: nothing to take. ~~Not yet: a release ahead of the one installed - 1.0.0 is
+still the only release.~~ Taken on 2026-10-30, on an XGS 3300 with OPNsense 26.7.7: with 1.0.0
+installed, `self-update.py`, run over SSH, answered `updated to v1.0.1 (8498e3f5f64a)`, the system
+log carries the same line, and `installed.json` recorded that commit.
 
 ## Where it fits
 
