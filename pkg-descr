@@ -20,6 +20,7 @@ Plugin Changelog
 * the Block button shows why a device was refused
 * the rules hook is checked by php -l, before the installer copies it
 * removal stops its cut, deletes its state and empties its table
+* the page's menu entry carries an icon in the XGS section, and a Font Awesome 6 one in its own
 
 1.0.0
 

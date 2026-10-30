@@ -10,6 +10,6 @@
         Menu/Menu.xml.
     -->
     <Firewall>
-        <PortGuard VisibleName="Port Guard" cssClass="fa fa-shield fa-fw" url="/ui/portguard"/>
+        <PortGuard VisibleName="Port Guard" cssClass="fa fa-shield-halved fa-fw" url="/ui/portguard"/>
     </Firewall>
 </menu>
