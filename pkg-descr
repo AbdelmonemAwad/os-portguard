@@ -12,6 +12,12 @@ those needs the switch.
 Plugin Changelog
 ================
 
+1.0.2
+
+* Signed releases: a release is installed only as its owner signed it
+* self-update.py: the latest release's signature read by the tag its
+  manifest names
+
 1.0.1
 
 * a device listed loses the connections it already has open: cut at Apply and every minute
