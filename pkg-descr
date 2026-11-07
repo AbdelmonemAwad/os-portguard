@@ -12,6 +12,14 @@ those needs the switch.
 Plugin Changelog
 ================
 
+1.0.2
+
+* an update installed only as its owner signed it: the release's
+  manifest checked with the release key this plugin carries, and the
+  archive's SHA-256 and size the signed ones
+* the latest release's signature read by the tag its manifest names,
+  and a manifest too deep to parse refused by its signature
+
 1.0.1
 
 * a device listed loses the connections it already has open: cut at Apply and every minute
