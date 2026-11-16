@@ -64,7 +64,24 @@
   every minute not yet;
 - **devices seen** - the devices the firewall has seen in the last day, with their interface,
   address and maker, each a click from being blocked; the cards say how many listed devices are
-  present and how many addresses pf blocks now.
+  present and how many addresses pf blocks now;
+- **automatic isolation** (since 2026-11-17; written, not yet run on a firewall) - off until it is
+  turned on under Settings, "Isolate devices that reach a command-and-control list", with a duration
+  (24 hours by default, 1 to 720). Every minute (`isolate.py`, from the cron entry) it reads what
+  [os-netreport](https://github.com/AbdelmonemAwad/os-netreport) records in
+  `/var/db/netreport/infected.json` - the devices of the firewall's own networks os-blocklists blocked
+  on their way to a command-and-control list - and isolates by its MAC address each one whose latest
+  blocked connection is in the last 10 minutes: a second MAC alias, `portguard_isolated`, blocked both
+  ways by the same kind of rules as the blocked devices and its open connections cut by `cut.py`,
+  apart from the list of blocked devices and from its switch. Never the firewall's own addresses and
+  MAC addresses, its gateways' addresses and MAC addresses, or an address the page was opened from in
+  the last 7 days. The **Isolated devices** tab lists each one with the list it reached, since and
+  until when, and an Undo button that lets it go at once; it is isolated again only when os-netreport
+  records a newer connection. What was not isolated is listed with why ("no MAC" where os-netreport
+  knows none). The list is kept in `/var/db/os-portguard/isolate.json`; config.xml changes only when
+  the alias does, and the alias is always made from that list - where the list is lost, as a `/var`
+  in memory loses it at a reboot, the alias is emptied rather than left isolating devices the page no
+  longer shows. Turning the option off lets every isolated device go at the next Apply.
 
 ~~a page in the XGS section of OPNsense's menu~~ - it is under **Firewall**, beside Block Lists (under
 **XGS** when os-xgs-npu is installed): it is not for XGS appliances only.
@@ -186,6 +203,11 @@ second machine listed by its MAC address while it held a TLS connection open:
 
 Still not tested: the cut every minute, the page's addresses counted only while a rule uses the
 table, the cards and the Block button's answer, and the checks before the copy.
+
+Automatic isolation (2026-11-17) is tested by `tools/test-isolate.py`, which the checks run: its
+decisions against files in a temporary directory, the commands it calls stood in for by small scripts,
+and the rules hook under php. Not yet run on a firewall: isolate.php writing the alias, the rules in
+pf, a device isolated and let go.
 
 ## Installation
 

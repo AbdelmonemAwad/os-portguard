@@ -34,7 +34,7 @@ rm -rf /usr/local/opnsense/scripts/portguard/release-keys
 cp -R "${HERE}/src/" /usr/local/
 chmod 644 /usr/local/opnsense/scripts/portguard/release-keys/*.pub
 chmod 755 /usr/local/opnsense/scripts/portguard/*.py /usr/local/opnsense/scripts/portguard/apply.php \
-    /usr/local/opnsense/scripts/portguard/place-menu.sh
+    /usr/local/opnsense/scripts/portguard/isolate.php /usr/local/opnsense/scripts/portguard/place-menu.sh
 chmod 644 /usr/local/opnsense/scripts/portguard/i18n/ui/source.json
 chmod 644 /usr/local/etc/cron.d/portguard /usr/local/etc/inc/plugins.inc.d/portguard.inc
 chmod 644 /usr/local/opnsense/service/conf/actions.d/actions_portguard.conf

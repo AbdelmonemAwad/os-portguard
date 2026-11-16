@@ -16,7 +16,8 @@
  * so `configctl portguard apply` does the whole job (2026-10-29: alone it wrote the alias and put no
  * rule into pf): the filter reloaded, which registers the rules; the filter's template and the
  * aliases, which resolve the addresses; and a first round of cut.py, which cuts the connections the
- * devices listed already have open - a rule stops only new ones.
+ * devices listed already have open - a rule stops only new ones. And a run of isolate.py, so that
+ * automatic isolation turned on or off takes effect at Apply rather than at the next minute.
  *
  *   apply.php     print a JSON summary (the page's Apply, and configctl portguard apply)
  */
@@ -102,5 +103,7 @@ $backend->configdRun('template reload OPNsense/Filter');
 $backend->configdRun('filter refresh_aliases');
 /* then the cut, once the table holds the addresses the aliases' refresh resolved */
 $cut = json_decode($backend->configdRun('portguard cut'), true);
+$isolate = json_decode($backend->configdRun('portguard isolate'), true);
 
-echo json_encode(['status' => 'ok', 'changes' => $report, 'cut' => is_array($cut) ? $cut : null]) . "\n";
+echo json_encode(['status' => 'ok', 'changes' => $report, 'cut' => is_array($cut) ? $cut : null,
+    'isolate' => is_array($isolate) ? $isolate : null]) . "\n";
