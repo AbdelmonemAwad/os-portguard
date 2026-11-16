@@ -241,13 +241,22 @@ def remember_client(state, client, now):
 # ---------------------------------------------------------------- the list
 
 def infected():
-    """os-netreport's entries, each with its address in it; {} where there is no file."""
+    """os-netreport's entries, each with its address in it; {} where there is no file. An entry written
+    without a MAC address (os-netreport knows the MAC addresses of its LAN scan only) takes the one the
+    ARP or NDP table holds for its address now, if any - a device on another interface, or behind a
+    lab link, is still found by its address."""
     data = load(INFECTED, {})
     out = {}
+    table = None
     for address, entry in data.items():
         ip = norm_ip(address)
         if ip and isinstance(entry, dict):
-            out[ip] = dict(entry, address=ip, mac=norm_mac(entry.get('mac')))
+            mac = norm_mac(entry.get('mac'))
+            if not mac:
+                if table is None:
+                    table = neighbours()
+                mac = table.get(ip, '')
+            out[ip] = dict(entry, address=ip, mac=mac)
     return out
 
 

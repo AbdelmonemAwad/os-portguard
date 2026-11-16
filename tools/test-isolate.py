@@ -228,6 +228,14 @@ check('list: the page client kept with its MAC', state()['managers']['192.0.2.50
 check('a second run, nothing new: the alias not written again', (iso.do_run(NOW + 60).get('added'), len(writes())),
       ([], 1))
 
+# an entry written without a MAC address takes the one ARP holds for its address; one ARP does not know stays empty
+kept = iso.load(iso.INFECTED, {})
+infected({'192.0.2.10': entry(NOW - 10), '192.0.2.68': entry(NOW - 10)})
+found = iso.infected()
+check('no MAC in the entry: the ARP table\'s MAC for its address', (found['192.0.2.10']['mac'],
+      found['192.0.2.68']['mac']), (PC_MAC, ''))
+iso.save(iso.INFECTED, kept)
+
 # ---------------------------------------------------------------- the page's client, never
 
 infected({'192.0.2.50': entry(NOW + 100, ADMIN_MAC), '192.0.2.51': entry(NOW + 100, ADMIN_MAC),
