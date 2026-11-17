@@ -189,7 +189,7 @@
                not drawn as "off" and empty */
             if (!data || data.error || data.status === 'failed' || typeof data.on !== 'boolean') {
                 $('#pg-isolate-note').text(plain("{{ lang._('Status could not be read.') }}") +
-                    (data && data.message ? ' (' + data.message + ')' : '')).show();
+                    (data && data.message ? ' (' + plain(data.message) + ')' : '')).show();
                 return;
             }
             $('#pg-isolate-note').text(plain("{{ lang._('Automatic isolation is off; it is turned on under Settings.') }}"))
@@ -251,7 +251,7 @@
                         if (!data || data.status !== 'ok') {
                             stdDialogInform("{{ lang._('Undo the isolation') }}",
                                 $('<div/>').text(plain("{{ lang._('The isolation could not be undone.') }}") +
-                                    (data && data.message ? ' ' + data.message : '')).html(), "{{ lang._('Close') }}");
+                                    (data && data.message ? ' ' + plain(data.message) : '')).html(), "{{ lang._('Close') }}");
                         }
                         refresh_isolated();
                         refresh();
@@ -349,7 +349,7 @@
     </div>
     <div id="isolated" class="tab-pane">
         <div class="text-muted" style="padding: 10px 15px 0;">
-            {{ lang._('A device os-netreport saw reaching a command-and-control list is isolated by its MAC address for the time set under Settings: nothing it sends passes the firewall and nothing reaches it through it. Never the firewall itself, its gateways, or an address this page was opened from.') }}
+            {{ lang._('A device os-netreport saw reaching a command-and-control list is isolated by its MAC address for the time set under Settings: the firewall blocks the addresses it is seen with, both ways - an address it takes later from the next minute. Never the firewall itself, its gateways, its HA peer\'s addresses set under High Availability, an address logged in to its web GUI or SSH, or an address this page was opened from in the last 7 days.') }}
         </div>
         <div id="pg-isolate-note" class="text-warning" style="display: none; padding: 10px 15px 0;"></div>
         <table id="pg-isolated" class="table table-condensed table-striped">

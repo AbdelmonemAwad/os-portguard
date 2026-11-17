@@ -4,9 +4,10 @@
 # Copyright (c) 2026 Abdelmonem Awad <eg2@live.com>
 #
 # Remove the Port Guard plugin files. The rules go with the filter reload run here, because they are
-# registered by the hook removed below. Kept: the settings, and the portguard_blocked alias in
-# Firewall: Aliases, which blocks nothing without the rules - remove it there when no longer wanted,
-# or turn Port Guard off and Apply before removing it, which removes it and empties its table.
+# registered by the hook removed below. Kept: the settings, and the aliases portguard_blocked and
+# portguard_isolated in Firewall: Aliases, which block nothing without the rules - remove them there
+# when no longer wanted, or turn Port Guard and automatic isolation off and Apply before removing it,
+# which removes them and empties their tables. The isolated devices' table is emptied here in any case.
 
 # the cron entry first, and the rules hook, which would stop a filter reload if it outlived its model
 rm -f /usr/local/etc/cron.d/portguard
@@ -43,4 +44,4 @@ done
 # emptied in any case. Nothing else fills it, and kept with the settings it would isolate its
 # devices again for a minute after a reinstall.
 /sbin/pfctl -t portguard_isolated -T flush > /dev/null 2>&1 || true
-echo "Port Guard removed; its alias stays in Firewall: Aliases"
+echo "Port Guard removed; its aliases, where there are any, stay in Firewall: Aliases"

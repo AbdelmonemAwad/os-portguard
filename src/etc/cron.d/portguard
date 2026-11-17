@@ -11,5 +11,6 @@
 #
 # Every minute: automatic isolation (isolate.py) - a device os-netreport saw reaching a
 # command-and-control list in the last 10 minutes isolated by its MAC address, an isolation that ran
-# out let go. With the option off and nothing isolated, it reads config.xml and exits.
+# out let go, the isolated devices' table kept. With the option off and nothing isolated, it reads
+# config.xml, asks pf whether that table still holds an address (pfctl -T show), and exits.
 * * * * * root /usr/local/opnsense/scripts/portguard/isolate.py run > /dev/null 2>&1

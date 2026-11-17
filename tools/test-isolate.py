@@ -9,7 +9,10 @@
     firewall's own addresses and MAC addresses, its gateways' (config.xml, /tmp's router files, the
     default route) and their MAC addresses, or an address the page was opened from; undo at once,
     and not again for the same entry until a newer "last"; expiry; the option turned off letting
-    every device go; the alias made from the list, so a lost list empties it;
+    every device go; the table made from the list, so a lost list empties it; and what the reviews of
+    2026-11-17 found - the device ARP shows at an entry's address, logins to the GUI and SSH, the HA
+    peer's sync target, shared MAC addresses, the addresses held for a whole isolation and 64 of them
+    at most, on pfctl's stdin, why a device was let go, config.xml read once under its lock;
   * cut.py - the isolated devices' table watched with automatic isolation on, its new addresses'
     states killed by id, its own snapshot, and the blocked devices' table as before;
   * plugins.inc.d/portguard.inc - the isolated devices' rules registered while automatic isolation is
@@ -434,6 +437,18 @@ with open(os.path.join(ROOT, 'src', 'opnsense', 'mvc', 'app', 'views', 'OPNsense
 check('the page: a list that could not be read is an error, not "off"',
       "data.status === 'failed' || typeof data.on !== 'boolean'" in volt, True)
 check('the page: device names through plain()', volt.count("text(plain(d.name || ''))"), 2)
+check('the page: the message of a list not read and of an Undo that failed through plain() too',
+      volt.count('plain(data.message)'), 2)
+# the settings' help and the tab say what the code checks: the HA peer's addresses, a login rather than a connection,
+# a router isolated whole rather than promised never to be
+with open(os.path.join(ROOT, 'src', 'opnsense', 'mvc', 'app', 'controllers', 'OPNsense', 'PortGuard', 'forms',
+                       'general.xml'), encoding='utf-8') as fh:
+    form = fh.read()
+check('the help and the tab: the HA peer\'s addresses, a login, not a connection; the help: a router isolated whole',
+      ([("HA peer\\'s addresses" in t or "HA peer's addresses" in t, 'logged in to its web GUI or SSH' in t,
+         'connection open' not in t) for t in (form, volt)],
+       'more than one IPv4 address at the time' in form and 'isolated with every device behind it' in form),
+      ([(True, True, True), (True, True, True)], True))
 os.remove(iso.STATE)
 infected({})
 

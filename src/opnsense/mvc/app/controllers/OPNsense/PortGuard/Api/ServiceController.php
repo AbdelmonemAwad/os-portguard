@@ -65,8 +65,9 @@ class ServiceController extends ApiControllerBase
     }
 
     /**
-     * Undo: an isolated device let go at once, by its MAC address; not isolated again until
-     * os-netreport records a newer connection of it to a command-and-control list
+     * Undo: an isolated device let go at once, by its MAC address; not isolated again before its
+     * isolation would have ended, and after that only when os-netreport records a newer connection of it
+     * to a command-and-control list
      */
     public function releaseAction()
     {

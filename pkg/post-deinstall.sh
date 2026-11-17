@@ -3,8 +3,9 @@
 #
 # Run by pkg(8) after the files of os-portguard have been removed; not during an upgrade. The rules
 # hook is gone with them, so a filter reload takes the rules out of pf. Kept: the settings, and the
-# portguard_blocked alias, which blocks nothing without the rules - remove it in Firewall: Aliases, or
-# turn Port Guard off and Apply before removing it, which removes it and empties its table.
+# portguard_blocked and portguard_isolated aliases, which block nothing without the rules - remove them
+# in Firewall: Aliases, or turn Port Guard and automatic isolation off and Apply before removing it,
+# which removes them and empties their tables. The isolated devices' table is emptied here in any case.
 
 # A cut already running stops now, rather than after its files went (2026-10-29). The bracket keeps
 # the pattern from matching the shell that runs this text.
@@ -52,4 +53,4 @@ done
 # emptied in any case. Nothing else fills it, and kept with the settings it would isolate its
 # devices again for a minute after a reinstall.
 /sbin/pfctl -t portguard_isolated -T flush > /dev/null 2>&1 || true
-echo "Port Guard removed; its alias stays in Firewall: Aliases"
+echo "Port Guard removed; its aliases, where there are any, stay in Firewall: Aliases"

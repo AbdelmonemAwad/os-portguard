@@ -1,5 +1,5 @@
 [
- "A device os-netreport saw reaching a command-and-control list is isolated by its MAC address for the time set under Settings: nothing it sends passes the firewall and nothing reaches it through it. Never the firewall itself, its gateways, or an address this page was opened from.",
+ "A device os-netreport saw reaching a command-and-control list is isolated by its MAC address for the time set under Settings: the firewall blocks the addresses it is seen with, both ways - an address it takes later from the next minute. Never the firewall itself, its gateways, its HA peer's addresses set under High Availability, an address logged in to its web GUI or SSH, or an address this page was opened from in the last 7 days.",
  "A listed device is stopped at the firewall: nothing it sends passes through it, and nothing reaches it through it. Two devices behind the same switch still reach each other - their frames never come to the firewall.",
  "Addresses blocked now",
  "An independent project, not affiliated with Deciso B.V.",
