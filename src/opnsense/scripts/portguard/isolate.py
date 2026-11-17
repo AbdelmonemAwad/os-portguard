@@ -12,7 +12,9 @@
 WHAT IT READS. os-netreport writes /var/db/netreport/infected.json: one entry per address of the
 firewall's own networks that os-blocklists blocked on its way to a command-and-control list -
 {"<address>": {"first", "last", "count", "list", "mac", "name"}}, "last" the time of the latest blocked
-connection, "list" the os-blocklists feed, "mac" and "name" empty where it knows none.
+connection, "list" the os-blocklists feed, "mac" and "name" empty where it knows none. config.xml is read
+once a run, whole, under the shared lock OPNsense's own readers take (read_config()), and that one
+reading serves the whole run; a run that cannot read it changes nothing.
 
 WHAT IT DOES, while "Isolate devices that reach a command-and-control list" (general.auto_isolate,
 off by default) is on: every entry whose MAC address is known and whose "last" is within the last
@@ -158,14 +160,40 @@ def save(path, data):
         raise
 
 
+def take(fh, mode=fcntl.LOCK_EX, wait=None):
+    """A lock on an open file, or False after `wait` seconds (WAIT where none is given)."""
+    until = time.monotonic() + (WAIT if wait is None else wait)
+    while True:
+        try:
+            fcntl.flock(fh, mode | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            if time.monotonic() >= until:
+                return False
+            time.sleep(0.5)
+
+
 # ---------------------------------------------------------------- the settings
 
-def settings():
-    """(on, hours) from config.xml - off where it cannot be read or says nothing: off by default."""
+def read_config(wait=None):
+    """config.xml's root, read whole under a shared lock, once for a whole run; None where it cannot be
+    read in time or does not parse. OPNsense rewrites the file in place - Config::save() truncates it and
+    writes it again while it holds an exclusive lock on it (Config.php:743-767) - and its own readers take
+    a shared one for that reason (Config.php:372-394); this is the same flock(2) lock. Read here in
+    several pieces, a rewrite between two of them left a run with part of its exceptions (a gateway of
+    config.xml missing, its router isolated), so every part of a run is given this one reading."""
     try:
-        root = ET.parse(CONFIG).getroot()
+        with open(CONFIG, 'rb') as fh:
+            if not take(fh, fcntl.LOCK_SH, wait):
+                return None
+            data = fh.read()
+        return ET.fromstring(data)
     except (OSError, ET.ParseError):
-        return None, DEFAULT_HOURS
+        return None
+
+
+def settings(root):
+    """(on, hours) from config.xml's root - off where it says nothing: off by default."""
     general = root.find('OPNsense/PortGuard/general')
     on = general is not None and (general.findtext('auto_isolate') or '0') == '1'
     try:
@@ -193,18 +221,14 @@ def own():
     return addrs, macs
 
 
-def gateways():
-    """The gateways' addresses: config.xml's, the routers OPNsense keeps for dynamic ones, and the
-    default routes."""
+def gateways(root):
+    """The gateways' addresses: config.xml's (the Gateways model, mounted at //OPNsense/Gateways), the
+    routers OPNsense keeps for dynamic ones, and the default routes."""
     out = set()
-    try:
-        root = ET.parse(CONFIG).getroot()
-        for item in root.findall('OPNsense/Gateways/gateway_item') + root.findall('gateways/gateway_item'):
-            ip = norm_ip(item.findtext('gateway'))
-            if ip:
-                out.add(ip)
-    except (OSError, ET.ParseError):
-        pass
+    for item in root.findall('OPNsense/Gateways/gateway_item') + root.findall('gateways/gateway_item'):
+        ip = norm_ip(item.findtext('gateway'))
+        if ip:
+            out.add(ip)
     try:
         names = [n for n in os.listdir(ROUTERS) if n.endswith('_router') or n.endswith('_routerv6')]
     except OSError:
@@ -259,25 +283,20 @@ def neighbours():
     return out
 
 
-def config_ports():
+def config_ports(root):
     """The web GUI's and SSH's ports, from config.xml: 443 or 80 by the GUI's protocol, and 22, where it
     says none."""
-    gui, ssh = '', ''
-    try:
-        root = ET.parse(CONFIG).getroot()
-        gui = (root.findtext('system/webgui/port') or '').strip()
-        if not gui:
-            gui = '80' if (root.findtext('system/webgui/protocol') or 'https').strip() == 'http' else '443'
-        ssh = (root.findtext('system/ssh/port') or '').strip()
-    except (OSError, ET.ParseError):
-        pass
+    gui = (root.findtext('system/webgui/port') or '').strip()
+    if not gui:
+        gui = '80' if (root.findtext('system/webgui/protocol') or 'https').strip() == 'http' else '443'
+    ssh = (root.findtext('system/ssh/port') or '').strip()
     return {p for p in (gui or '443', ssh or '22') if p.isdigit()}
 
 
-def managing(mine):
+def managing(root, mine):
     """The addresses with a connection open to this firewall's web GUI or SSH port, from pf's states
     ("all tcp 192.0.2.1:443 <- 192.0.2.50:51515", an IPv6 one "2001:db8::1[22] <- ...")."""
-    ports, out = config_ports(), set()
+    ports, out = config_ports(root), set()
     for line in run_cmd([PFCTL, '-ss']).splitlines():
         found = re.search(r'\stcp\s+(\S+?)(?::(\d+)|\[(\d+)\])\s+<-\s+(\S+?)(?::\d+|\[\d+\])\s', line)
         if found and norm_ip(found.group(1)) in mine and (found.group(2) or found.group(3)) in ports:
@@ -287,13 +306,9 @@ def managing(mine):
     return out
 
 
-def ha_peers():
+def ha_peers(root):
     """The HA peer's addresses from config.xml's hasync (pfsync's peer, the configuration's target)."""
     out = set()
-    try:
-        root = ET.parse(CONFIG).getroot()
-    except (OSError, ET.ParseError):
-        return out
     for path in ('hasync/pfsyncpeerip', 'hasync/synchronizetoip', 'OPNsense/HASync/pfsyncpeerip',
                  'OPNsense/HASync/synchronizetoip'):
         text = (root.findtext(path) or '').strip()
@@ -304,25 +319,26 @@ def ha_peers():
     return out
 
 
-def exceptions(state, now):
-    """{'addr': {address: why}, 'mac': {mac: why}} - what is never isolated, each with its reason."""
+def exceptions(root, state, now, table=None):
+    """{'addr': {address: why}, 'mac': {mac: why}} - what is never isolated, each with its reason - from
+    config.xml's root, STATE's page clients and ARP and NDP now (table, read here where not given)."""
     addr, mac = {}, {}
-    table = neighbours()
+    table = neighbours() if table is None else table
     mine, my_macs = own()
     blind = not mine or not my_macs
     for ip in mine:
         addr[ip] = 'this firewall'
     for m in my_macs:
         mac[m] = 'this firewall'
-    for ip in gateways():
+    for ip in gateways(root):
         addr.setdefault(ip, 'a gateway')
         for m in macs_at(table, ip):
             mac.setdefault(m, 'a gateway')
-    for ip in ha_peers():
+    for ip in ha_peers(root):
         addr.setdefault(ip, 'the HA peer')
         for m in macs_at(table, ip):
             mac.setdefault(m, 'the HA peer')
-    for ip in managing(mine):
+    for ip in managing(root, mine):
         addr.setdefault(ip, 'a connection to the web GUI or SSH of this firewall')
         for m in macs_at(table, ip):
             mac.setdefault(m, 'a connection to the web GUI or SSH of this firewall')
@@ -486,17 +502,25 @@ def step(state, entries, exc, on, hours, now):
     return added, gone
 
 
-def alias_ready():
-    """Whether the isolated devices' alias is there to be filled: in config.xml, external and on - made at
-    the page's Apply while automatic isolation is on (apply.php). None where config.xml cannot be read."""
-    try:
-        root = ET.parse(CONFIG).getroot()
-    except (OSError, ET.ParseError):
-        return None
+ALIAS_NOT_READY = {
+    'missing': 'the alias %s is not there: Apply on the Settings tab makes it' % ALIAS,
+    'off': 'the alias %s is switched off: Apply on the Settings tab switches it on' % ALIAS,
+    # a MAC alias of that name - an earlier build's, or the owner's - is OPNsense's to fill from ARP and
+    # NDP, so what is emptied here would come back: said, until Apply makes it the external one
+    'not external': 'the alias %s is not an external alias: Apply on the Settings tab makes it one' % ALIAS,
+}
+
+
+def alias_state(root):
+    """Whether the isolated devices' alias is there to be filled - 'ready': in config.xml, on and
+    external, as apply.php makes it at the page's Apply while automatic isolation is on - or why not:
+    'missing', 'off', 'not external' (ALIAS_NOT_READY)."""
     for alias in root.findall('OPNsense/Firewall/Alias/aliases/alias'):
         if alias.findtext('name') == ALIAS:
-            return (alias.findtext('enabled') or '1') == '1' and (alias.findtext('type') or '') == 'external'
-    return False
+            if (alias.findtext('enabled') or '1') != '1':
+                return 'off'
+            return 'ready' if (alias.findtext('type') or '') == 'external' else 'not external'
+    return 'missing'
 
 
 def table_now():
@@ -529,6 +553,10 @@ def fill_table(want):
     """pf's table made to hold these addresses, and the open connections of those it gains cut (cut.py,
     as the page's Apply runs it). The firewall's part of the summary."""
     have = table_now()
+    if have is None and not want:
+        # nothing to hold, and no table (a filter reload that failed, say): nothing to do, no failure to
+        # write into the system log every minute
+        return {'status': 'ok', 'held': 0}
     if have is None:
         return {'status': 'failed', 'errors': ['no table %s: Apply on the Settings tab makes it' % ALIAS]}
     if have == want:
@@ -551,21 +579,20 @@ def fill_table(want):
     return answer
 
 
-def commit(state, added, gone, summary, exc=None):
+def commit(state, added, gone, summary, exc, alias):
     """STATE written, and pf's table made to hold the addresses the isolated devices have now - at every
-    run, as addresses move (a lease renewed), and so that a STATE that was lost empties it."""
-    exc = exc or {'addr': {}, 'mac': {}}
+    run, as addresses move (a lease renewed), and so that a STATE that was lost empties it. exc is this
+    run's exceptions, whose addresses the table never holds, and alias the alias's state (alias_state()):
+    Undo is given both as a run is."""
     want = blocked_addresses(state, exc) if state.get('isolated') else []
-    ready = alias_ready()
-    if ready or (not want and table_now()):
+    if alias == 'ready' or (not want and table_now()):
         # nothing to hold and the table still holding addresses (isolation turned off, its alias gone or
         # switched off): emptied all the same - nobody stays isolated with nothing on the page
         answer = fill_table(want)
-    elif want:
-        answer = {'status': 'failed', 'errors': ['the alias %s is not there: Apply on the Settings tab makes it'
-                                                 % ALIAS]}
     else:
         answer = {'status': 'ok', 'held': 0}
+    if alias != 'ready' and (want or alias == 'not external'):
+        answer = {'status': 'failed', 'errors': [ALIAS_NOT_READY.get(alias, ALIAS_NOT_READY['missing'])]}
     summary['firewall'] = answer
     if answer.get('status') != 'ok':
         log('isolation list not put into the firewall: %s' % '; '.join(answer.get('errors') or ['failed']))
@@ -578,23 +605,28 @@ def commit(state, added, gone, summary, exc=None):
     save(STATE, state)
 
 
+NOT_READ = 'isolate: config.xml could not be read; nothing changed'
+
+
 def do_run(now=None):
     now = int(now if now is not None else time.time())
-    on, hours = settings()
+    root = read_config()
+    if root is None:
+        # nothing isolated, let go or written on a part of the exceptions; the next minute reads it again
+        log(NOT_READ)
+        return {'run': now, 'status': 'failed', 'message': NOT_READ}
+    on, hours = settings(root)
     state = load(STATE, {})
     summary = {'run': now, 'on': bool(on)}
-    if on is None:
-        summary['message'] = 'isolate: config.xml could not be read; nothing changed'
-        return summary
     # off, nothing isolated and nothing in the table: once a minute, nothing to write
     if not on and not state.get('isolated') and not state.get('released') and not table_now():
         summary['message'] = 'isolate: off'
         return summary
     entries = infected(state) if on else {}
-    exc = exceptions(state, now) if on else {'addr': {}, 'mac': {}}
+    exc = exceptions(root, state, now) if on else {'addr': {}, 'mac': {}}
     added, gone = step(state, entries, exc, on, hours, now)
     summary.update({'isolated': sorted(state['isolated']), 'added': added, 'let_go': gone})
-    commit(state, added, gone, summary, exc)
+    commit(state, added, gone, summary, exc, alias_state(root))
     if exc.get('blind'):
         log('isolate: this firewall\'s own addresses could not be read (ifconfig): nothing new isolated')
         summary['message'] = 'isolate: this firewall\'s own addresses could not be read; nothing new isolated'
@@ -605,7 +637,11 @@ def do_run(now=None):
 
 def do_list(client, now=None):
     now = int(now if now is not None else time.time())
-    on, hours = settings()
+    root = read_config()
+    if root is None:
+        # said as a failure, which the page shows as such - not as "off" and an empty list
+        return {'status': 'failed', 'message': NOT_READ}
+    on, hours = settings(root)
     state = load(STATE, {})
     if remember_client(state, client, now):
         save(STATE, state)
@@ -629,6 +665,9 @@ def do_list(client, now=None):
 def do_undo(mac, client, now=None):
     now = int(now if now is not None else time.time())
     mac = norm_mac(mac)
+    root = read_config()
+    if root is None:
+        return {'status': 'failed', 'message': NOT_READ}
     state = load(STATE, {})
     remember_client(state, client, now)
     item = (state.get('isolated') or {}).pop(mac, None) if mac else None
@@ -641,22 +680,12 @@ def do_undo(mac, client, now=None):
                                              'until': number(item.get('until')),
                                              'addresses': listed(item.get('addresses'))}
     summary = {'status': 'ok', 'mac': mac}
-    commit(state, [], [mac], summary)
+    # the table written as a run writes it: never an exception's address - another isolated device may
+    # answer ARP for a gateway's by now - and only while the alias is ready
+    commit(state, [], [mac], summary, exceptions(root, state, now), alias_state(root))
     if (summary.get('firewall') or {}).get('status') != 'ok':
         summary['status'] = 'failed'
     return summary
-
-
-def take(lock, wait=WAIT):
-    until = time.monotonic() + wait
-    while True:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
-        except OSError:
-            if time.monotonic() >= until:
-                return False
-            time.sleep(0.5)
 
 
 def main(argv):

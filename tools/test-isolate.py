@@ -19,6 +19,7 @@ The commands they call (ifconfig, arp, ndp, route, pfctl, cut.py) are small scri
 what a firewall would; pfctl keeps the isolated devices' table in a file. POSIX only (fcntl, sh): run it on Linux or FreeBSD, or under WSL.
 
     python3 tools/test-isolate.py"""
+import fcntl
 import importlib.util
 import json
 import os
@@ -184,7 +185,7 @@ mine, my_macs = iso.own()
 check('own addresses from ifconfig', sorted(mine), ['192.0.2.1', '2001:db8::1', '203.0.113.2', 'fe80::1'])
 check('own MAC addresses from ifconfig', sorted(my_macs), [FW_MAC, '02:00:00:00:00:02'])
 config()
-check('gateways: config.xml, /tmp router files, the default route', sorted(iso.gateways()),
+check('gateways: config.xml, /tmp router files, the default route', sorted(iso.gateways(iso.read_config())),
       ['2001:db8:ffff::1', '203.0.113.1'])
 check('neighbours from ARP and NDP, incomplete ones left out', iso.neighbours(),
       {'203.0.113.1': GW_MAC, '192.0.2.10': PC_MAC, '192.0.2.50': ADMIN_MAC, '2001:db8::66': BAD_MAC})
@@ -193,7 +194,7 @@ check('neighbours from ARP and NDP, incomplete ones left out', iso.neighbours(),
 
 infected({'192.0.2.66': entry(NOW - 60, BAD_MAC)})
 config()
-check('settings: off by default, 24 hours', iso.settings(), (False, 24))
+check('settings: off by default, 24 hours', iso.settings(iso.read_config()), (False, 24))
 check('off by default: nothing isolated', iso.do_run(NOW).get('message'), 'isolate: off')
 check('off by default: no state written, no alias', (os.path.exists(iso.STATE), writes()), (False, []))
 config(auto='0')
@@ -202,7 +203,7 @@ check('off: nothing isolated', iso.do_run(NOW).get('message'), 'isolate: off')
 # ---------------------------------------------------------------- isolating
 
 config(auto='1', hours='2')
-check('settings: on, 2 hours', iso.settings(), (True, 2))
+check('settings: on, 2 hours', iso.settings(iso.read_config()), (True, 2))
 infected({
     '192.0.2.66': entry(NOW - 60, BAD_MAC, name='camera'),          # recent, MAC known: isolated
     '2001:db8::66': entry(NOW - 30, BAD_MAC),                       # the same device's IPv6 address
@@ -354,9 +355,9 @@ iso.do_undo(BAD_MAC, '', until + 150)
 os.remove(iso.STATE)
 infected({})
 config(auto='1', hours='99999')
-check('a duration out of range is held to 720 hours', iso.settings(), (True, 720))
+check('a duration out of range is held to 720 hours', iso.settings(iso.read_config()), (True, 720))
 config(auto='1', hours='x')
-check('a duration that is not a number: 24 hours', iso.settings(), (True, 24))
+check('a duration that is not a number: 24 hours', iso.settings(iso.read_config()), (True, 24))
 check('main: unknown command answers in JSON', subprocess.run(
     [sys.executable, '-c', 'import sys; sys.path.insert(0, %r); import isolate; isolate.STATE_DIR = %r; '
      'isolate.LOCK = %r; isolate.main(["nonsense"])' % (SCRIPTS, iso.STATE_DIR, iso.LOCK)],
@@ -446,8 +447,8 @@ with open(CONFIG, 'w', encoding='utf-8') as fh:
     fh.write(text.replace('<opnsense>', '<opnsense><hasync><pfsyncpeerip>192.0.2.95</pfsyncpeerip></hasync>', 1))
 try:
     check('the addresses with a connection open to the GUI or SSH port, IPv4 and IPv6; not another port, not '
-          'through the firewall', sorted(iso.managing(iso.own()[0])), ['192.0.2.80', '2001:db8::81'])
-    check('the HA peer, from config.xml', sorted(iso.ha_peers()), ['192.0.2.95'])
+          'through the firewall', sorted(iso.managing(iso.read_config(), iso.own()[0])), ['192.0.2.80', '2001:db8::81'])
+    check('the HA peer, from config.xml', sorted(iso.ha_peers(iso.read_config())), ['192.0.2.95'])
     if os.path.exists(iso.STATE):
         os.remove(iso.STATE)
     infected({'192.0.2.91': entry(NOW + 100, SHARED_MAC), '192.0.2.93': entry(NOW + 100, SPOOF_MAC),
@@ -477,6 +478,102 @@ check('the page words each new reason', all("'%s': \"{{ lang._(" % r in volt for
 os.remove(iso.STATE)
 infected({})
 config(auto='1', hours='2')
+
+# ---------------------------------------------------------------- config.xml read once, under OPNsense's lock
+
+# OPNsense's Config::save() rewrites config.xml in place under an exclusive lock: a run waits for it, and
+# one that cannot have it in time changes nothing - nor does Undo; the list says it failed
+infected({'192.0.2.66': entry(NOW + 100, BAD_MAC)})
+holder = open(CONFIG, 'rb')
+fcntl.flock(holder, fcntl.LOCK_EX)
+saved_wait, iso.WAIT = iso.WAIT, 1
+try:
+    answer = iso.do_run(NOW + 110)
+    listing = iso.do_list('', NOW + 110)
+finally:
+    fcntl.flock(holder, fcntl.LOCK_UN)
+    iso.WAIT = saved_wait
+check('config.xml held by its writer: the run changes nothing and says so, the list is a failure',
+      (answer.get('message'), os.path.exists(iso.STATE), listing.get('status')),
+      ('isolate: config.xml could not be read; nothing changed', False, 'failed'))
+check('... and the next run reads it', BAD_MAC in (iso.do_run(NOW + 120).get('isolated') or []), True)
+fcntl.flock(holder, fcntl.LOCK_EX)
+iso.WAIT = 1
+try:
+    answer = iso.do_undo(BAD_MAC, '', NOW + 125)
+finally:
+    fcntl.flock(holder, fcntl.LOCK_UN)
+    holder.close()
+    iso.WAIT = saved_wait
+check('... Undo while it is held: failed, the device still isolated', (answer.get('status'), BAD_MAC in state()['isolated']),
+      ('failed', True))
+iso.do_undo(BAD_MAC, '', NOW + 126)
+# config.xml emptied by a rewrite after the run read it: every part of the run goes on that one reading - the
+# router of a static gateway, which only config.xml names, stays an exception
+os.remove(iso.STATE)
+ROUTER_MAC = '02:00:00:00:99:01'
+with open(CONFIG, encoding='utf-8') as fh:
+    whole = fh.read()
+with open(CONFIG, 'w', encoding='utf-8') as fh:
+    fh.write(whole.replace('</Gateways>', '<gateway_item><name>LAN_RTR</name><gateway>192.0.2.254</gateway>'
+                                          '</gateway_item></Gateways>'))
+fixture('arp', ARP_TEXT + '? (192.0.2.254) at %s on igb0 expires in 900 seconds [ethernet]\n' % ROUTER_MAC)
+infected({'192.0.2.254': entry(NOW + 130, ROUTER_MAC)})
+real_neighbours = iso.neighbours
+
+
+def neighbours_after_a_rewrite():
+    open(CONFIG, 'w').close()
+    return real_neighbours()
+
+
+iso.neighbours = neighbours_after_a_rewrite
+try:
+    iso.do_run(NOW + 140)
+finally:
+    iso.neighbours = real_neighbours
+    with open(CONFIG, 'w', encoding='utf-8') as fh:
+        fh.write(whole)
+    fixture('arp', ARP_TEXT)
+check('config.xml emptied by a rewrite after the run read it: the router of a static gateway still an exception',
+      (ROUTER_MAC in state()['isolated'], state()['skipped'].get('192.0.2.254', {}).get('reason')), (False, 'a gateway'))
+# Undo writes the table as a run does: another isolated device answering ARP for the gateway's address by
+# then does not put that address into the table
+os.remove(iso.STATE)
+fixture('arp', ARP_TEXT + '? (192.0.2.66) at %s on igb0 expires in 900 seconds [ethernet]\n'
+        '? (192.0.2.67) at %s on igb0 expires in 900 seconds [ethernet]\n' % (BAD_MAC, BAD2_MAC))
+infected({'192.0.2.66': entry(NOW + 150, BAD_MAC), '192.0.2.67': entry(NOW + 150, BAD2_MAC)})
+iso.do_run(NOW + 160)
+fixture('arp', ARP_TEXT.replace('(203.0.113.1) at %s' % GW_MAC, '(203.0.113.1) at %s' % BAD2_MAC) +
+        '? (192.0.2.66) at %s on igb0 expires in 900 seconds [ethernet]\n'
+        '? (192.0.2.67) at %s on igb0 expires in 900 seconds [ethernet]\n' % (BAD_MAC, BAD2_MAC))
+iso.do_undo(BAD_MAC, '', NOW + 170)
+check('Undo writes the table with the exceptions: a gateway\'s address never in it', '203.0.113.1' in writes()[-1], False)
+fixture('arp', ARP_TEXT)
+os.remove(iso.STATE)
+infected({})
+# the alias there but its table not (a filter reload that failed) and nothing isolated: nothing to do, and no
+# failure written into the system log every minute
+os.remove(TABLE)
+n = len(logged)
+answer = iso.do_run(NOW + 180)
+open(TABLE, 'w').close()
+check('no table, nothing isolated: no failure, nothing logged', (answer['firewall']['status'], logged[n:]), ('ok', []))
+# a MAC alias of that name, an earlier build's, is OPNsense's to fill: not written, said until Apply
+config(auto='1', hours='2', aliases='<alias><name>portguard_isolated</name><enabled>1</enabled><type>mac</type>'
+                                     '<content>%s</content></alias>' % BAD_MAC)
+os.remove(iso.STATE)
+infected({'192.0.2.66': entry(NOW + 190, BAD_MAC)})
+n = len(writes())
+answer = iso.do_run(NOW + 200)
+check('a MAC alias by that name: its table not written, the run says why', (len(writes()) - n, answer['firewall'].get('errors')),
+      (0, ['the alias portguard_isolated is not an external alias: Apply on the Settings tab makes it one']))
+check('the alias\'s state: missing, switched off, ready', [iso.alias_state(iso.ET.fromstring(
+    '<opnsense><OPNsense><Firewall><Alias><aliases>%s</aliases></Alias></Firewall></OPNsense></opnsense>' % a))
+    for a in ('', ISOLATED_ALIAS.replace('<enabled>1', '<enabled>0'), ISOLATED_ALIAS)], ['missing', 'off', 'ready'])
+config(auto='1', hours='2')
+os.remove(iso.STATE)
+infected({})
 
 # ---------------------------------------------------------------- cut.py, the isolated table
 
