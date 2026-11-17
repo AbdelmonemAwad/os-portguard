@@ -17,20 +17,20 @@ once a run, whole, under the shared lock OPNsense's own readers take (read_confi
 reading serves the whole run; a run that cannot read it changes nothing.
 
 WHAT IT DOES, while "Isolate devices that reach a command-and-control list" (general.auto_isolate,
-off by default) is on: every entry whose MAC address is known and whose "last" is within the last
-RECENT seconds puts that MAC address on the isolation list, until now + general.isolate_hours (24 by
-default). The firewall blocks it through an alias of its own, portguard_isolated: an external alias
-(OPNsense's "External (advanced)"), which apply.php makes at the page's Apply while automatic isolation
-is on and plugins.inc.d/portguard.inc's rules block both ways. Its table is kept here, with pfctl, at
-every run (held()): for each isolated MAC address, the addresses that reached the list, the ones ARP and
-NDP show for it then, and every one they showed during its isolation - a device quiet for a while loses
-its ARP entry, and is still held when it speaks again - but never a link-local address (a table has no
-scope), an exception's, or one ARP or NDP shows under another MAC address then. An address a device
-takes is held from the next run, within a minute; cut.py cuts the open connections of the addresses the
-table gains. So an isolation writes nothing into config.xml (no backup pushed out, nothing saved over a
-change made in the GUI meanwhile) and reloads no filter, and a firewall that takes over in HA starts
-with an empty table. An entry without a MAC address that ARP or NDP does not know either is not
-isolated, and the page lists it as such.
+off by default) is on: every entry whose device is known (WHICH DEVICE, below) and whose "last" is
+within the last RECENT seconds puts that device's MAC address on the isolation list, until now +
+general.isolate_hours (24 by default). The firewall blocks it through an alias of its own,
+portguard_isolated: an external alias (OPNsense's "External (advanced)"), which apply.php makes at the
+page's Apply while automatic isolation is on and plugins.inc.d/portguard.inc's rules block both ways.
+Its table is kept here, with pfctl, at every run (held()): for each isolated MAC address, the addresses
+that reached the list, the ones ARP and NDP show for it then, and every one they showed during its
+isolation - a device quiet for a while loses its ARP entry, and is still held when it speaks again - but
+never a link-local address (a table has no scope), an exception's, or one ARP or NDP shows under another
+MAC address then. An address a device takes is held from the next run, within a minute; cut.py cuts the
+open connections of the addresses the table gains. So an isolation writes nothing into config.xml (no
+backup pushed out, nothing saved over a change made in the GUI meanwhile) and reloads no filter, and a
+firewall that takes over in HA starts with an empty table. An entry without a MAC address that ARP or
+NDP does not know either is not isolated, and the page lists it as such.
 
 A SHARED MAC ADDRESS - one ARP shows with more than one IPv4 address, as a repeater that puts its own MAC
 address on its clients' traffic is shown - is isolated by the addresses that reached the list only; one
@@ -43,8 +43,9 @@ NEVER ISOLATED - a fixed exception, checked at every run: the firewall's own add
 as who(1) prints it) or to its web GUI within the GUI's session timeout (the audit log's logins), every
 address the page was opened from in the last MANAGER_DAYS days - the page passes its client address
 ($_SERVER['REMOTE_ADDR']) on each reading - and the MAC addresses ARP and NDP show at any of those. A
-connection is not a login: a device scanning the GUI's or SSH's port opens one. A link-local address counts for none of these: fe80::1 is a
-neighbour of every segment, and an isolated device keeps its own, which no table holds.
+connection is not a login: a device scanning the GUI's or SSH's port opens one. A link-local address
+counts for none of these: fe80::1 is a neighbour of every segment, and an isolated device keeps its
+own, which no table holds.
 
 ONCE ISOLATED, a device is let go only when its isolation ends, by Undo, when the option is turned off,
 or when its MAC address turns out to be the firewall's own - never for something it can do itself: an
@@ -57,9 +58,14 @@ minute), nor after that for the same entry: only once os-netreport records a new
 its addresses. An isolation that expires is let go the same way, but for the end. Turning the option
 off lets every isolated device go.
 
-AN ENTRY WITHOUT A MAC ADDRESS takes the one ARP or NDP holds for its address when it is first read,
-and keeps it while its "last" is the same (STATE's macs): a device that later gets that address is
-not taken for it, and an entry ARP does not answer for in one run keeps its device.
+WHICH DEVICE. An entry's device is the MAC address ARP or NDP shows at its address, where they show one -
+the kernel's view now, of a connection made in the last RECENT seconds - and otherwise the one
+os-netreport names: os-netreport takes an address's MAC address from its own device scan and never
+clears it, so an address that moved before its scan saw the new holder is named for the device it had
+before (infected()). Found once for the entry's address and "last", either way, it is kept while that
+"last" is the same (STATE's macs): a device that later gets that address is not taken for it, and an
+entry ARP does not answer for in one run keeps its device. os-netreport's name for the entry goes with
+the device it names, and with no other.
 
 The list is kept in STATE (/var/db/os-portguard/isolate.json), not in config.xml. The table is always
 made from STATE: where STATE is lost - a /var in memory after a reboot - the table is emptied and nobody
@@ -479,7 +485,8 @@ def remember_client(state, client, now, table=None):
     link-local one, which counts for nothing (exceptions()) - and the ones older than MANAGER_DAYS
     forgotten. Whether STATE changed."""
     managers = state.setdefault('managers', {})
-    old = [k for k, v in managers.items() if not isinstance(v, dict) or now - number(v.get('at')) > MANAGER_DAYS * 86400]
+    old = [k for k, v in managers.items()
+           if not isinstance(v, dict) or now - number(v.get('at')) > MANAGER_DAYS * 86400]
     for k in old:
         del managers[k]
     ip = norm_ip(client)
@@ -493,31 +500,44 @@ def remember_client(state, client, now, table=None):
 
 # ---------------------------------------------------------------- the list
 
-def infected(state):
-    """os-netreport's entries, each with its address in it; {} where there is no file. An entry written
-    without a MAC address (os-netreport knows the MAC addresses of its LAN scan only) takes the one the
-    ARP or NDP table holds for its address, if any - a device on another interface, or behind a lab
-    link, is still found by its address - found once for the entry's address and "last" and kept in
-    STATE's macs: another device given that address later is not taken for it."""
+def infected(state, table=None):
+    """os-netreport's entries, each with its address in it and its device's MAC address ('mac') - the one
+    os-netreport named kept as 'named'; {} where there is no file.
+
+    An entry's device is the MAC address ARP or NDP shows at its address (table, read here where not
+    given) where it shows one: os-netreport takes an address's MAC address from the newest holder in its
+    own device scan and never clears it once set (alerts.py's device_of() and collect_c2()), so an address
+    that moved before its scan saw the new holder is named for the device it had before - which was
+    isolated, while the address that reached the list was not blocked. ARP and NDP are the kernel's view
+    now, of a connection made in the last RECENT seconds. Where they show nothing, the MAC address
+    os-netreport names; an entry with none, which ARP does not know either, has none (not isolated, and
+    listed as such) and is looked up again at the next run. The device is found once for the entry's
+    address and "last" and kept in STATE's macs, whichever way it was found: another device given that
+    address later is not taken for it, and an entry ARP does not answer for in one run keeps its device.
+    os-netreport's name of the entry is of the device it names, so it is not given to another."""
     data = load(INFECTED, {})
     out = {}
-    table = None
     found = state.setdefault('macs', {})
     for address, entry in data.items():
         ip = norm_ip(address)
-        if ip and isinstance(entry, dict):
-            mac = norm_mac(entry.get('mac'))
-            last = number(entry.get('last'))
-            kept = found.get(ip) if isinstance(found.get(ip), dict) else {}
-            if not mac and number(kept.get('last')) == last and norm_mac(kept.get('mac')):
-                mac = norm_mac(kept.get('mac'))
-            elif not mac:
-                if table is None:
-                    table = neighbours()
-                mac = (macs_at(table, ip) or [''])[0]
-                if mac:
-                    found[ip] = {'last': last, 'mac': mac}
-            out[ip] = dict(entry, address=ip, mac=mac)
+        if not ip or not isinstance(entry, dict):
+            continue
+        named = norm_mac(entry.get('mac'))
+        last = number(entry.get('last'))
+        kept = found.get(ip) if isinstance(found.get(ip), dict) else {}
+        if number(kept.get('last')) == last and norm_mac(kept.get('mac')):
+            mac = norm_mac(kept.get('mac'))
+        else:
+            found.pop(ip, None)
+            if table is None:
+                table = neighbours()
+            # a link-local address is every segment's: without a scope it names no one device
+            holder = '' if link_local(ip) else (macs_at(table, ip) or [''])[0]
+            mac = holder or named
+            if mac:
+                found[ip] = {'last': last, 'mac': mac}
+        name = entry.get('name', '') if mac == named or not named else ''
+        out[ip] = dict(entry, address=ip, mac=mac, named=named, name=name)
     for ip in [a for a in found if a not in out]:
         del found[ip]
     return out
@@ -669,6 +689,9 @@ def step(state, entries, exc, on, hours, now):
         isolated[mac] = {'addresses': [entry['address']], 'list': entry.get('list', ''),
                          'name': entry.get('name', ''), 'since': now, 'until': now + hours * 3600,
                          'last': last, 'seen': {}, 'shared': False}
+        if entry.get('named') and entry['named'] != mac:
+            log('isolate: %s: os-netreport names %s, but ARP or NDP showed %s at that address - %s isolated'
+                % (entry['address'], entry['named'], mac, mac))
         follow(isolated[mac], mac, table, exc, now)
         released.pop(mac, None)
         added.append(mac)
@@ -805,8 +828,10 @@ def do_run(now=None):
     if not on and not state.get('isolated') and not state.get('released') and not table_now():
         summary['message'] = 'isolate: off'
         return summary
-    entries = infected(state) if on else {}
-    exc = exceptions(root, state, now) if on else {'addr': {}, 'mac': {}}
+    # one reading of ARP and NDP for the whole run: the entries' devices and the exceptions' MAC addresses
+    table = neighbours() if on else {}
+    entries = infected(state, table) if on else {}
+    exc = exceptions(root, state, now, table) if on else {'addr': {}, 'mac': {}}
     added, gone = step(state, entries, exc, on, hours, now)
     summary.update({'isolated': sorted(state['isolated']), 'added': added, 'let_go': gone})
     commit(state, added, gone, summary, exc, alias_state(root))
@@ -841,7 +866,7 @@ def do_list(client, now=None):
                      'name': item.get('name', ''), 'since': item.get('since'), 'until': item.get('until'),
                      'holding': holding, 'addresses_now': now_at, 'shared': bool(item.get('shared')),
                      'held': bool(holding) and all(ip in in_table for ip in holding)})
-    entries = infected(state)
+    entries = infected(state, table)
     others = [{'address': ip, 'mac': '', 'name': e.get('name', ''), 'list': e.get('list', ''),
                'last': e.get('last'), 'reason': 'no MAC'} for ip, e in sorted(entries.items()) if not e['mac']]
     for ip, item in sorted((state.get('skipped') or {}).items()):
@@ -857,20 +882,22 @@ def do_undo(mac, client, now=None):
     if root is None:
         return {'status': 'failed', 'message': NOT_READ}
     state = load(STATE, {})
-    remember_client(state, client, now)
+    table = neighbours()
+    remember_client(state, client, now, table)
     item = (state.get('isolated') or {}).pop(mac, None) if mac else None
     if item is None:
         save(STATE, state)
         return {'status': 'failed', 'message': 'not isolated: %s' % (mac or 'no MAC address given')}
     # held back until the isolation would have ended: a device taken for infected by mistake keeps reaching
     # the list, and would be isolated again the next minute
-    state.setdefault('released', {})[mac] = {'last': max(released_last(infected(state), mac), number(item.get('last'))),
+    state.setdefault('released', {})[mac] = {'last': max(released_last(infected(state, table), mac),
+                                                         number(item.get('last'))),
                                              'until': number(item.get('until')),
                                              'addresses': listed(item.get('addresses'))}
     summary = {'status': 'ok', 'mac': mac}
     # the table written as a run writes it: never an exception's address - another isolated device may
     # answer ARP for a gateway's by now - and only while the alias is ready
-    commit(state, [], [mac], summary, exceptions(root, state, now), alias_state(root))
+    commit(state, [], [mac], summary, exceptions(root, state, now, table), alias_state(root))
     if (summary.get('firewall') or {}).get('status') != 'ok':
         summary['status'] = 'failed'
     return summary

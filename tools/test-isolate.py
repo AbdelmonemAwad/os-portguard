@@ -671,6 +671,48 @@ for name in os.listdir(AUDIT):
 os.remove(iso.STATE)
 infected({})
 
+# ---------------------------------------------------------------- which device: the one ARP shows at the address
+
+# os-netreport names the address's previous holder (its scan had not seen the new one, and it never clears a
+# MAC address it once wrote): the device ARP shows there now is isolated, and the address that reached the list
+# is blocked
+PREV_MAC, NEXT_MAC = '02:00:00:00:30:01', '02:00:00:00:30:02'
+fixture('arp', ARP_TEXT + arp_line('192.0.2.66', OTHER_MAC) + arp_line('192.0.2.30', PREV_MAC))
+infected({'192.0.2.66': entry(NOW - 30, PREV_MAC, name='printer')})
+n = len(logged)
+iso.do_run(NOW)
+check('os-netreport names the previous holder, ARP shows another now: the one ARP shows isolated, the address that '
+      'reached the list blocked', (sorted(state()['isolated']), iso.table_now()), ([OTHER_MAC], ['192.0.2.66']))
+check('... said in the system log', any(('os-netreport names %s' % PREV_MAC) in line for line in logged[n:]), True)
+check('... and the name os-netreport gives the device it names is not given to the one isolated',
+      state()['isolated'][OTHER_MAC]['name'], '')
+fixture('arp', ARP_TEXT + arp_line('192.0.2.66', PREV_MAC))
+iso.do_run(NOW + 60)
+check('... kept for that "last": ARP showing the first holder there again does not hand it back',
+      (sorted(state()['isolated']), state()['macs'].get('192.0.2.66', {}).get('mac')), ([OTHER_MAC], OTHER_MAC))
+infected({'192.0.2.66': entry(NOW + 100, PREV_MAC, name='printer')})
+iso.do_run(NOW + 110)
+check('... a newer "last", ARP and os-netreport agreeing: that one isolated, with its name, and kept for that "last"',
+      (sorted(state()['isolated']), state()['isolated'][PREV_MAC]['name'], state()['macs'].get('192.0.2.66', {}).get('mac')),
+      ([OTHER_MAC, PREV_MAC], 'printer', PREV_MAC))
+# found by agreeing, the device is kept as well: one that takes the address afterwards is not taken for that "last"
+fixture('arp', ARP_TEXT + arp_line('192.0.2.66', NEXT_MAC))
+iso.do_run(NOW + 170)
+check('... ARP showing a third device there afterwards, the same "last": not taken for it',
+      sorted(state()['isolated']), [OTHER_MAC, PREV_MAC])
+# ARP showing nothing at the first reading: the device os-netreport names, kept for that "last" all the same
+os.remove(iso.STATE)
+fixture('arp', ARP_TEXT)
+infected({'192.0.2.66': entry(NOW + 200, PREV_MAC)})
+iso.do_run(NOW + 210)
+fixture('arp', ARP_TEXT + arp_line('192.0.2.66', NEXT_MAC))
+iso.do_run(NOW + 270)
+check('ARP showing nothing at first: the device os-netreport names, kept - one ARP shows there afterwards is not taken',
+      (sorted(state()['isolated']), state()['macs'].get('192.0.2.66', {}).get('mac')), ([PREV_MAC], PREV_MAC))
+fixture('arp', ARP_TEXT)
+os.remove(iso.STATE)
+infected({})
+
 # ---------------------------------------------------------------- config.xml read once, under OPNsense's lock
 
 # OPNsense's Config::save() rewrites config.xml in place under an exclusive lock: a run waits for it, and
