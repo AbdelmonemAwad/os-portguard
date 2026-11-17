@@ -895,6 +895,46 @@ check('the page words each reason a device was let go for', all("'%s': \"{{ lang
 os.remove(iso.STATE)
 infected({})
 
+# ---------------------------------------------------------------- cut.py for what the table gains; old records forgotten
+
+
+def cut_runs():
+    try:
+        with open(CUTS, encoding='utf-8') as fh:
+            return len(fh.read().split())
+    except OSError:
+        return 0
+
+
+# cut.py cuts the connections of the addresses the table gains: run when it gains some, not when it only loses some
+config(auto='1', hours='2')
+fixture('arp', ARP_TEXT + arp_line('192.0.2.66', BAD_MAC) + arp_line('192.0.2.67', BAD2_MAC))
+infected({'192.0.2.66': entry(NOW, BAD_MAC), '192.0.2.67': entry(NOW, BAD2_MAC)})
+before = cut_runs()
+iso.do_run(NOW + 10)
+gained, n = cut_runs(), len(writes())
+iso.do_undo(BAD2_MAC, '', NOW + 20)
+check('cut.py run when the table gains addresses, not when it only loses some (Undo)',
+      (gained - before, len(writes()) - n, cut_runs() - gained), (1, 1, 0))
+# a device let go is remembered while it is held back - its entry gone or not - and while os-netreport keeps an entry
+# of it; forgotten after
+iso.do_undo(BAD_MAC, '', NOW + 25)
+infected({'192.0.2.67': entry(NOW, BAD2_MAC)})
+iso.do_run(NOW + 30)
+held_while = sorted(state()['released'])
+iso.do_run(NOW + 10 + 7200)
+gone_after = sorted(state()['released'])
+infected({})
+iso.do_run(NOW + 7300)
+check('let go: remembered while held back, its entry gone or not, then while an entry of it is kept; forgotten after',
+      (held_while, gone_after, state()['released']), (sorted([BAD_MAC, BAD2_MAC]), [BAD2_MAC], {}))
+# an address the page was opened from more than 7 days ago is forgotten, not only no longer an exception
+st = {'managers': {'192.0.2.50': {'at': NOW - 8 * 86400, 'mac': ADMIN_MAC}, '192.0.2.51': {'at': NOW - 86400, 'mac': ''}}}
+check('a page client of more than 7 days ago forgotten, a newer one kept', (iso.remember_client(st, '', NOW),
+      sorted(st['managers'])), (True, ['192.0.2.51']))
+fixture('arp', ARP_TEXT)
+os.remove(iso.STATE)
+
 # ---------------------------------------------------------------- config.xml read once, under OPNsense's lock
 
 # OPNsense's Config::save() rewrites config.xml in place under an exclusive lock: a run waits for it, and
