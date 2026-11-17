@@ -25,9 +25,12 @@ the page lists it as such.
 
 NEVER ISOLATED - a fixed exception, checked at every run, for the isolated ones too: the firewall's own
 addresses and MAC addresses (ifconfig), its gateways' addresses (config.xml, the routers OPNsense keeps
-for dynamic gateways in /tmp, the default routes) and their MAC addresses (ARP and NDP), and every
-address the page was opened from in the last MANAGER_DAYS days, with its MAC address - the page passes
-its client address ($_SERVER['REMOTE_ADDR']) on each reading.
+for dynamic gateways in /tmp, the default routes) and their MAC addresses (ARP and NDP), its HA peer
+(config.xml's hasync), every address with a connection open to its web GUI or SSH port (pf's states),
+and every address the page was opened from in the last MANAGER_DAYS days, with its MAC address - the
+page passes its client address ($_SERVER['REMOTE_ADDR']) on each reading. And never a MAC address the
+ARP table gives more than one IPv4 address (a repeater, a router: every device behind it would be cut
+off), nor one any of whose addresses is an exception.
 
 UNDO lets a device go at once, and it is not isolated again before its isolation would have ended (a
 device taken for infected by mistake keeps reaching the list, and would be isolated again the next
@@ -68,6 +71,7 @@ IFCONFIG = '/sbin/ifconfig'
 ARP = '/usr/sbin/arp'
 NDP = '/usr/sbin/ndp'
 ROUTE = '/sbin/route'
+PFCTL = '/sbin/pfctl'
 ROUTERS = '/tmp'            # OPNsense's <interface>_router and _routerv6 files: a dynamic gateway's address
 TAG = 'portguard'
 RECENT = 600                # an entry is acted on while its latest blocked connection is this recent
@@ -217,8 +221,28 @@ def gateways():
     return out
 
 
+def neighbour_key(addr):
+    """An address as neighbours() keys it: a link-local one with its scope (fe80::1%igb0 and fe80::1%igb1
+    are two neighbours), any other as norm_ip() gives it."""
+    ip = norm_ip(addr)
+    scope = str(addr or '').split('%')[1].split('/')[0].strip() if '%' in str(addr or '') else ''
+    if ip and scope and ipaddress.ip_address(ip).is_link_local:
+        return ip + '%' + scope
+    return ip
+
+
+def macs_at(table, ip):
+    """The MAC addresses neighbours() holds for an address, under any scope."""
+    return sorted({mac for key, mac in table.items() if key.split('%')[0] == ip})
+
+
+def addresses_of(table, mac):
+    """The addresses neighbours() holds for a MAC address, without their scopes."""
+    return sorted({key.split('%')[0] for key, m in table.items() if m == mac})
+
+
 def neighbours():
-    """{address: MAC address} from the ARP and NDP tables now."""
+    """{address: MAC address} from the ARP and NDP tables now, link-local addresses with their scope."""
     out = {}
     for line in run_cmd([ARP, '-an']).splitlines():
         found = re.match(r'\S+ \(([^)]+)\) at (\S+)', line)
@@ -227,7 +251,52 @@ def neighbours():
     for line in run_cmd([NDP, '-an']).splitlines():
         parts = line.split()
         if len(parts) >= 2 and norm_ip(parts[0]) and norm_mac(parts[1]):
-            out[norm_ip(parts[0])] = norm_mac(parts[1])
+            out[neighbour_key(parts[0])] = norm_mac(parts[1])
+    return out
+
+
+def config_ports():
+    """The web GUI's and SSH's ports, from config.xml: 443 or 80 by the GUI's protocol, and 22, where it
+    says none."""
+    gui, ssh = '', ''
+    try:
+        root = ET.parse(CONFIG).getroot()
+        gui = (root.findtext('system/webgui/port') or '').strip()
+        if not gui:
+            gui = '80' if (root.findtext('system/webgui/protocol') or 'https').strip() == 'http' else '443'
+        ssh = (root.findtext('system/ssh/port') or '').strip()
+    except (OSError, ET.ParseError):
+        pass
+    return {p for p in (gui or '443', ssh or '22') if p.isdigit()}
+
+
+def managing(mine):
+    """The addresses with a connection open to this firewall's web GUI or SSH port, from pf's states
+    ("all tcp 192.0.2.1:443 <- 192.0.2.50:51515", an IPv6 one "2001:db8::1[22] <- ...")."""
+    ports, out = config_ports(), set()
+    for line in run_cmd([PFCTL, '-ss']).splitlines():
+        found = re.search(r'\stcp\s+(\S+?)(?::(\d+)|\[(\d+)\])\s+<-\s+(\S+?)(?::\d+|\[\d+\])\s', line)
+        if found and norm_ip(found.group(1)) in mine and (found.group(2) or found.group(3)) in ports:
+            ip = norm_ip(found.group(4))
+            if ip:
+                out.add(ip)
+    return out
+
+
+def ha_peers():
+    """The HA peer's addresses from config.xml's hasync (pfsync's peer, the configuration's target)."""
+    out = set()
+    try:
+        root = ET.parse(CONFIG).getroot()
+    except (OSError, ET.ParseError):
+        return out
+    for path in ('hasync/pfsyncpeerip', 'hasync/synchronizetoip', 'OPNsense/HASync/pfsyncpeerip',
+                 'OPNsense/HASync/synchronizetoip'):
+        text = (root.findtext(path) or '').strip()
+        for word in re.split(r'[\s,]+', re.sub(r'^https?://', '', text)):
+            ip = norm_ip(word.split(':')[0] if word.count(':') == 1 else word)
+            if ip:
+                out.add(ip)
     return out
 
 
@@ -243,15 +312,23 @@ def exceptions(state, now):
         mac[m] = 'this firewall'
     for ip in gateways():
         addr.setdefault(ip, 'a gateway')
-        if table.get(ip):
-            mac.setdefault(table[ip], 'a gateway')
+        for m in macs_at(table, ip):
+            mac.setdefault(m, 'a gateway')
+    for ip in ha_peers():
+        addr.setdefault(ip, 'the HA peer')
+        for m in macs_at(table, ip):
+            mac.setdefault(m, 'the HA peer')
+    for ip in managing(mine):
+        addr.setdefault(ip, 'a connection to the web GUI or SSH of this firewall')
+        for m in macs_at(table, ip):
+            mac.setdefault(m, 'a connection to the web GUI or SSH of this firewall')
     for ip, seen in (state.get('managers') or {}).items():
         if not isinstance(seen, dict) or now - number(seen.get('at')) > MANAGER_DAYS * 86400:
             continue
         addr.setdefault(ip, 'the address this page is opened from')
-        for m in filter(None, (norm_mac(seen.get('mac')), table.get(ip))):
+        for m in filter(None, [norm_mac(seen.get('mac'))] + macs_at(table, ip)):
             mac.setdefault(m, 'the address this page is opened from')
-    return {'addr': addr, 'mac': mac, 'blind': blind}
+    return {'addr': addr, 'mac': mac, 'blind': blind, 'table': table}
 
 
 def remember_client(state, client, now):
@@ -260,7 +337,8 @@ def remember_client(state, client, now):
     if not ip:
         return False
     managers = state.setdefault('managers', {})
-    managers[ip] = {'at': now, 'mac': neighbours().get(ip, '') or (managers.get(ip) or {}).get('mac', '')}
+    managers[ip] = {'at': now, 'mac': (macs_at(neighbours(), ip) or [''])[0] or
+                    ((managers.get(ip) if isinstance(managers.get(ip), dict) else {}).get('mac', ''))}
     for old in [k for k, v in managers.items()
                 if not isinstance(v, dict) or now - number(v.get('at')) > MANAGER_DAYS * 86400]:
         del managers[old]
@@ -290,7 +368,7 @@ def infected(state):
             elif not mac:
                 if table is None:
                     table = neighbours()
-                mac = table.get(ip, '')
+                mac = (macs_at(table, ip) or [''])[0]
                 if mac:
                     found[ip] = {'last': last, 'mac': mac}
             out[ip] = dict(entry, address=ip, mac=mac)
@@ -300,10 +378,19 @@ def infected(state):
 
 
 def why_not(entry, exc):
+    """Why this entry's device is not isolated, or None: its address or MAC address an exception, one of
+    the addresses its MAC address has an exception, or more than one IPv4 address behind its MAC
+    address (a repeater, a router - isolating it would cut off every device behind it)."""
     if entry['address'] in exc['addr']:
         return exc['addr'][entry['address']]
     if entry['mac'] in exc['mac']:
         return exc['mac'][entry['mac']]
+    behind = addresses_of(exc.get('table') or {}, entry['mac'])
+    for ip in behind:
+        if ip in exc['addr']:
+            return exc['addr'][ip]
+    if len([ip for ip in behind if '.' in ip]) > 1:
+        return 'a MAC address several devices share'
     return None
 
 
@@ -340,7 +427,8 @@ def step(state, entries, exc, on, hours, now):
         item['until'] = min(number(item.get('until')), now + hours * 3600)
         if now >= item['until']:
             why = 'expired'
-        elif mac in exc['mac'] or any(a in exc['addr'] for a in listed(item.get('addresses'))):
+        elif mac in exc['mac'] or any(a in exc['addr'] for a in listed(item.get('addresses'))) or \
+                why_not({'address': '', 'mac': mac}, exc):
             why = 'an exception'
         if why:
             released[mac] = {'last': max(released_last(entries, mac), number(item.get('last'))), 'until': 0,

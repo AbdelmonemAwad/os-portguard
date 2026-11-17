@@ -380,6 +380,73 @@ check('the page: device names through plain()', volt.count("text(plain(d.name ||
 os.remove(iso.STATE)
 infected({})
 
+# ---------------------------------------------------------------- shared MACs, scopes, GUI and SSH, the HA peer
+
+with open(os.path.join(FIX, 'arp'), encoding='utf-8') as fh:
+    ARP_BEFORE = fh.read()
+with open(os.path.join(FIX, 'ndp'), encoding='utf-8') as fh:
+    NDP_BEFORE = fh.read()
+SHARED_MAC, SPOOF_MAC, VIEWER_MAC = '02:00:00:00:77:01', '02:00:00:00:77:02', '02:00:00:00:77:03'
+fixture('arp', ARP_BEFORE +
+        '? (192.0.2.91) at %s on igb0 expires in 900 seconds [ethernet]\n'
+        '? (192.0.2.92) at %s on igb0 expires in 900 seconds [ethernet]\n'
+        '? (192.0.2.93) at %s on igb0 expires in 900 seconds [ethernet]\n'
+        '? (203.0.113.9) at %s on igb1 expires in 900 seconds [ethernet]\n'
+        '? (192.0.2.80) at %s on igb0 expires in 900 seconds [ethernet]\n'
+        '? (192.0.2.81) at 02:00:00:00:77:04 on igb0 expires in 900 seconds [ethernet]\n'
+        % (SHARED_MAC, SHARED_MAC, SPOOF_MAC, SPOOF_MAC, VIEWER_MAC))
+fixture('ndp', NDP_BEFORE + 'fe80::1%igb0                         02:00:00:00:00:fe  igb0 23h59m58s S R\n'
+        'fe80::1%igb1                         02:00:00:00:10:01  igb1 23h59m58s S R\n')
+check('NDP: a link-local address keeps its scope - two neighbours, two MAC addresses',
+      sorted((k, v) for k, v in iso.neighbours().items() if k.startswith('fe80::1%')),
+      [('fe80::1%igb0', GW_MAC), ('fe80::1%igb1', PC_MAC)])
+# pf's states: one to the GUI's port, one to SSH's, one to another port of the firewall, and one through it
+tool('pfctl-states', 'cat <<EOF\n'
+     'all tcp 192.0.2.1:443 <- 192.0.2.80:51515       ESTABLISHED:ESTABLISHED\n'
+     'all tcp 2001:db8::1[22] <- 2001:db8::81[52525]       ESTABLISHED:ESTABLISHED\n'
+     'all udp 192.0.2.1:53 <- 192.0.2.81:53535       SINGLE:MULTIPLE\n'
+     'all tcp 198.51.100.7:443 <- 192.0.2.81:54545       ESTABLISHED:ESTABLISHED\n'
+     'EOF')
+saved_pfctl, iso.PFCTL = iso.PFCTL, os.path.join(BIN, 'pfctl-states')
+config(auto='1', hours='2')
+with open(CONFIG, encoding='utf-8') as fh:
+    text = fh.read()
+with open(CONFIG, 'w', encoding='utf-8') as fh:
+    fh.write(text.replace('<opnsense>', '<opnsense><hasync><pfsyncpeerip>192.0.2.95</pfsyncpeerip></hasync>', 1))
+try:
+    check('the addresses with a connection open to the GUI or SSH port, IPv4 and IPv6; not another port, not '
+          'through the firewall', sorted(iso.managing(iso.own()[0])), ['192.0.2.80', '2001:db8::81'])
+    check('the HA peer, from config.xml', sorted(iso.ha_peers()), ['192.0.2.95'])
+    if os.path.exists(iso.STATE):
+        os.remove(iso.STATE)
+    infected({'192.0.2.91': entry(NOW + 100, SHARED_MAC), '192.0.2.93': entry(NOW + 100, SPOOF_MAC),
+              '192.0.2.80': entry(NOW + 100, VIEWER_MAC), '192.0.2.95': entry(NOW + 100, '02:00:00:00:77:05'),
+              '192.0.2.81': entry(NOW + 100, '02:00:00:00:77:04')})
+    with open(CONFIG, encoding='utf-8') as fh:
+        text = fh.read()
+    with open(CONFIG, 'w', encoding='utf-8') as fh:
+        fh.write(text.replace('<gateway>203.0.113.1</gateway>', '<gateway>203.0.113.9</gateway>'))
+    iso.do_run(NOW + 110)
+    skipped = state()['skipped']
+    check('not isolated: a MAC address two IPv4 addresses share; one whose other address is the gateway; a connection '
+          'to the GUI; the HA peer - each with why; a connection to another port is isolated',
+          ({a: skipped[a]['reason'] for a in skipped}, sorted(state()['isolated'])),
+          ({'192.0.2.91': 'a MAC address several devices share', '192.0.2.93': 'a gateway',
+            '192.0.2.80': 'a connection to the web GUI or SSH of this firewall', '192.0.2.95': 'the HA peer'},
+           ['02:00:00:00:77:04']))
+finally:
+    iso.PFCTL = saved_pfctl
+    fixture('arp', ARP_BEFORE)
+    fixture('ndp', NDP_BEFORE)
+with open(os.path.join(ROOT, 'src', 'opnsense', 'mvc', 'app', 'views', 'OPNsense', 'PortGuard', 'index.volt'),
+          encoding='utf-8') as fh:
+    volt = fh.read()
+check('the page words each new reason', all("'%s': \"{{ lang._(" % r in volt for r in (
+    'the HA peer', 'a connection to the web GUI or SSH of this firewall', 'a MAC address several devices share')), True)
+os.remove(iso.STATE)
+infected({})
+config(auto='1', hours='2')
+
 # ---------------------------------------------------------------- cut.py, the isolated table
 
 KILLS = os.path.join(TOP, 'kills')

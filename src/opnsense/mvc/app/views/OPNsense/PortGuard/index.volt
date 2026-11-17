@@ -166,6 +166,9 @@
             'this firewall': "{{ lang._('not isolated: this firewall') }}",
             'a gateway': "{{ lang._('not isolated: a gateway') }}",
             'the address this page is opened from': "{{ lang._('not isolated: an address this page was opened from') }}",
+            'the HA peer': "{{ lang._('not isolated: the HA peer') }}",
+            'a connection to the web GUI or SSH of this firewall': "{{ lang._('not isolated: a connection to the web GUI or SSH of this firewall') }}",
+            'a MAC address several devices share': "{{ lang._('not isolated: a MAC address several devices share (a repeater, a router)') }}",
             'undone': "{{ lang._('not isolated again: undone, until its isolation would have ended and a newer connection') }}"
         };
 
