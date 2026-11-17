@@ -231,9 +231,29 @@ check('a second run, nothing new: the alias not written again', (iso.do_run(NOW 
 # an entry written without a MAC address takes the one ARP holds for its address; one ARP does not know stays empty
 kept = iso.load(iso.INFECTED, {})
 infected({'192.0.2.10': entry(NOW - 10), '192.0.2.68': entry(NOW - 10)})
-found = iso.infected()
+found = iso.infected({})
 check('no MAC in the entry: the ARP table\'s MAC for its address', (found['192.0.2.10']['mac'],
       found['192.0.2.68']['mac']), (PC_MAC, ''))
+# ... found once for the entry's address and "last", and kept: another device given that address later is not taken
+# for it, a run ARP does not answer in keeps it; a newer "last" is looked up again
+with open(os.path.join(FIX, 'arp'), encoding='utf-8') as fh:
+    ARP_TEXT = fh.read()
+OTHER_MAC = '02:00:00:00:10:02'
+macs_state = {}
+infected({'192.0.2.10': entry(NOW - 10)})
+seen = [iso.infected(macs_state)['192.0.2.10']['mac']]
+fixture('arp', ARP_TEXT.replace(PC_MAC, OTHER_MAC))
+seen.append(iso.infected(macs_state)['192.0.2.10']['mac'])
+fixture('arp', ''.join(line for line in ARP_TEXT.splitlines(True) if '(192.0.2.10)' not in line))
+seen.append(iso.infected(macs_state)['192.0.2.10']['mac'])
+infected({'192.0.2.10': entry(NOW + 50)})
+fixture('arp', ARP_TEXT.replace(PC_MAC, OTHER_MAC))
+seen.append(iso.infected(macs_state)['192.0.2.10']['mac'])
+fixture('arp', ARP_TEXT)
+check('the MAC found for an entry kept while its "last" is the same: not another holder of the address, not lost '
+      'when ARP misses once; a newer "last" looked up again', seen, [PC_MAC, PC_MAC, PC_MAC, OTHER_MAC])
+infected({})
+check('... and forgotten once the entry is gone', (iso.infected(macs_state), macs_state['macs']), ({}, {}))
 iso.save(iso.INFECTED, kept)
 
 # ---------------------------------------------------------------- the page's client, never
@@ -259,13 +279,19 @@ n = len(writes())
 answer = iso.do_undo(BAD_MAC, '192.0.2.50', NOW + 200)
 check('undo: ok, let go at once, the alias rewritten without it',
       (answer.get('status'), BAD_MAC in state()['isolated'], writes()[n:]), ('ok', False, [[]]))
-check('undo: remembered against the newest "last" of its entries', state()['released'][BAD_MAC], NOW - 30)
+check('undo: held back against the newest "last" of its entries, until its isolation would have ended',
+      (state()['released'][BAD_MAC]['last'], state()['released'][BAD_MAC]['until']), (NOW - 30, NOW + 2 * 3600))
 iso.do_run(NOW + 260)
 check('undone: not isolated again for the same entry', (BAD_MAC in state()['isolated'],
       state()['skipped']['2001:db8::66']['reason']), (False, 'undone'))
+# a device taken for infected by mistake keeps reaching the list: Undo holds until its isolation would have ended
 infected({'192.0.2.66': entry(NOW + 300, BAD_MAC), '2001:db8::66': entry(NOW - 30, BAD_MAC)})
 iso.do_run(NOW + 320)
-check('a newer "last": isolated again', BAD_MAC in state()['isolated'], True)
+check('undone: a newer "last" before its isolation would have ended - still let through',
+      (BAD_MAC in state()['isolated'], state()['skipped']['192.0.2.66']['reason']), (False, 'undone'))
+infected({'192.0.2.66': entry(NOW + 2 * 3600 + 5, BAD_MAC), '2001:db8::66': entry(NOW - 30, BAD_MAC)})
+iso.do_run(NOW + 2 * 3600 + 10)
+check('undone: a newer "last" after that: isolated again', BAD_MAC in state()['isolated'], True)
 check('undo of a device not isolated: failed, nothing written',
       iso.do_undo(BAD2_MAC, '', NOW + 330).get('status'), 'failed')
 
@@ -274,7 +300,7 @@ check('undo of a device not isolated: failed, nothing written',
 until = state()['isolated'][BAD_MAC]['until']
 iso.do_run(until)
 check('expired: let go, and not again for the same entry', (BAD_MAC in state()['isolated'],
-      state()['released'][BAD_MAC]), (False, NOW + 300))
+      state()['released'][BAD_MAC]['last'], state()['released'][BAD_MAC]['until']), (False, NOW + 2 * 3600 + 5, 0))
 infected({'192.0.2.66': entry(until + 10, BAD_MAC)})
 iso.do_run(until + 20)
 check('a newer connection after expiry: isolated again', BAD_MAC in state()['isolated'], True)

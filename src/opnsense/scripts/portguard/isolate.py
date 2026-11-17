@@ -29,9 +29,15 @@ for dynamic gateways in /tmp, the default routes) and their MAC addresses (ARP a
 address the page was opened from in the last MANAGER_DAYS days, with its MAC address - the page passes
 its client address ($_SERVER['REMOTE_ADDR']) on each reading.
 
-UNDO lets a device go at once, and it is not isolated again for the same entry: only once
-os-netreport records a newer "last" for one of its addresses. An isolation that expires is let go the
-same way. Turning the option off lets every isolated device go.
+UNDO lets a device go at once, and it is not isolated again before its isolation would have ended (a
+device taken for infected by mistake keeps reaching the list, and would be isolated again the next
+minute), nor after that for the same entry: only once os-netreport records a newer "last" for one of
+its addresses. An isolation that expires is let go the same way, but for the end. Turning the option
+off lets every isolated device go.
+
+AN ENTRY WITHOUT A MAC ADDRESS takes the one ARP or NDP holds for its address when it is first read,
+and keeps it while its "last" is the same (STATE's macs): a device that later gets that address is
+not taken for it, and an entry ARP does not answer for in one run keeps its device.
 
 The list is kept in STATE (/var/db/os-portguard/isolate.json), not in config.xml, which is saved only
 when the alias changes. The alias is always made from STATE: where STATE is lost - a /var in memory
@@ -263,23 +269,33 @@ def remember_client(state, client, now):
 
 # ---------------------------------------------------------------- the list
 
-def infected():
+def infected(state):
     """os-netreport's entries, each with its address in it; {} where there is no file. An entry written
     without a MAC address (os-netreport knows the MAC addresses of its LAN scan only) takes the one the
-    ARP or NDP table holds for its address now, if any - a device on another interface, or behind a
-    lab link, is still found by its address."""
+    ARP or NDP table holds for its address, if any - a device on another interface, or behind a lab
+    link, is still found by its address - found once for the entry's address and "last" and kept in
+    STATE's macs: another device given that address later is not taken for it."""
     data = load(INFECTED, {})
     out = {}
     table = None
+    found = state.setdefault('macs', {})
     for address, entry in data.items():
         ip = norm_ip(address)
         if ip and isinstance(entry, dict):
             mac = norm_mac(entry.get('mac'))
-            if not mac:
+            last = number(entry.get('last'))
+            kept = found.get(ip) if isinstance(found.get(ip), dict) else {}
+            if not mac and number(kept.get('last')) == last and norm_mac(kept.get('mac')):
+                mac = norm_mac(kept.get('mac'))
+            elif not mac:
                 if table is None:
                     table = neighbours()
                 mac = table.get(ip, '')
+                if mac:
+                    found[ip] = {'last': last, 'mac': mac}
             out[ip] = dict(entry, address=ip, mac=mac)
+    for ip in [a for a in found if a not in out]:
+        del found[ip]
     return out
 
 
@@ -289,6 +305,14 @@ def why_not(entry, exc):
     if entry['mac'] in exc['mac']:
         return exc['mac'][entry['mac']]
     return None
+
+
+def held_back(record, now):
+    """(the "last" an undone or expired device is let go against, the time before which it is not
+    isolated again) from STATE's released - a number in an older STATE."""
+    if isinstance(record, dict):
+        return number(record.get('last')), number(record.get('until'))
+    return number(record if record is not None else -1), 0
 
 
 def released_last(entries, mac):
@@ -319,7 +343,8 @@ def step(state, entries, exc, on, hours, now):
         elif mac in exc['mac'] or any(a in exc['addr'] for a in listed(item.get('addresses'))):
             why = 'an exception'
         if why:
-            released[mac] = max(released_last(entries, mac), number(item.get('last')))
+            released[mac] = {'last': max(released_last(entries, mac), number(item.get('last'))), 'until': 0,
+                             'addresses': listed(item.get('addresses'))}
             gone.append(mac)
             del isolated[mac]
     skipped = {}
@@ -346,7 +371,8 @@ def step(state, entries, exc, on, hours, now):
                 item['addresses'] = sorted(set(listed(item.get('addresses'))) | {entry['address']})
             item['last'] = max(number(item.get('last')), last)
             continue
-        if last <= number(released.get(mac, -1)):
+        let_go_last, let_go_until = held_back(released.get(mac), now)
+        if mac in released and (now < let_go_until or last <= let_go_last):
             skipped[entry['address']] = {'mac': mac, 'reason': 'undone', 'last': last,
                                          'list': entry.get('list', ''), 'name': entry.get('name', '')}
             continue
@@ -355,9 +381,15 @@ def step(state, entries, exc, on, hours, now):
                          'last': last}
         released.pop(mac, None)
         added.append(mac)
-    # a let-go entry is remembered while os-netreport keeps an entry of that MAC address
-    for mac in [m for m in released if not any(e['mac'] == m for e in entries.values())]:
-        del released[mac]
+    # a let-go device is remembered while it is held back, or os-netreport keeps an entry of its MAC
+    # address or of one of its addresses
+    for mac in list(released):
+        record = released[mac]
+        addresses = listed(record.get('addresses')) if isinstance(record, dict) else []
+        if now < held_back(record, now)[1]:
+            continue
+        if not any(e['mac'] == mac or e['address'] in addresses for e in entries.values()):
+            del released[mac]
     state['skipped'] = skipped
     return added, gone
 
@@ -419,7 +451,7 @@ def do_run(now=None):
     if not on and not state.get('isolated') and not state.get('released') and not alias_now():
         summary['message'] = 'isolate: off'
         return summary
-    entries = infected() if on else {}
+    entries = infected(state) if on else {}
     exc = exceptions(state, now) if on else {'addr': {}, 'mac': {}}
     added, gone = step(state, entries, exc, on, hours, now)
     summary.update({'isolated': sorted(state['isolated']), 'added': added, 'let_go': gone})
@@ -442,7 +474,7 @@ def do_list(client, now=None):
     for mac, item in sorted((state.get('isolated') or {}).items()):
         rows.append({'mac': mac, 'addresses': listed(item.get('addresses')), 'list': item.get('list', ''),
                      'name': item.get('name', ''), 'since': item.get('since'), 'until': item.get('until')})
-    entries = infected()
+    entries = infected(state)
     others = [{'address': ip, 'mac': '', 'name': e.get('name', ''), 'list': e.get('list', ''),
                'last': e.get('last'), 'reason': 'no MAC'} for ip, e in sorted(entries.items()) if not e['mac']]
     for ip, item in sorted((state.get('skipped') or {}).items()):
@@ -460,7 +492,11 @@ def do_undo(mac, client, now=None):
     if item is None:
         save(STATE, state)
         return {'status': 'failed', 'message': 'not isolated: %s' % (mac or 'no MAC address given')}
-    state.setdefault('released', {})[mac] = max(released_last(infected(), mac), number(item.get('last')))
+    # held back until the isolation would have ended: a device taken for infected by mistake keeps reaching
+    # the list, and would be isolated again the next minute
+    state.setdefault('released', {})[mac] = {'last': max(released_last(infected(state), mac), number(item.get('last'))),
+                                             'until': number(item.get('until')),
+                                             'addresses': listed(item.get('addresses'))}
     summary = {'status': 'ok', 'mac': mac}
     commit(state, [], [mac], summary)
     if (summary.get('firewall') or {}).get('status') != 'ok':

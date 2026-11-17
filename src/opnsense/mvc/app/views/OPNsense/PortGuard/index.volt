@@ -166,7 +166,7 @@
             'this firewall': "{{ lang._('not isolated: this firewall') }}",
             'a gateway': "{{ lang._('not isolated: a gateway') }}",
             'the address this page is opened from': "{{ lang._('not isolated: an address this page was opened from') }}",
-            'undone': "{{ lang._('not isolated again: undone, until a newer connection') }}"
+            'undone': "{{ lang._('not isolated again: undone, until its isolation would have ended and a newer connection') }}"
         };
 
         function when(seconds) {
@@ -223,7 +223,7 @@
         $(document).on('click', '.pg-undo', function () {
             const mac = $(this).attr('data-mac') || '';
             stdDialogConfirm("{{ lang._('Undo the isolation') }}",
-                "{{ lang._('The device is let through at once. It is isolated again only when os-netreport records a newer connection of it to a command-and-control list.') }}" +
+                "{{ lang._('The device is let through at once. It is not isolated again before its isolation would have ended, and after that only when os-netreport records a newer connection of it to a command-and-control list.') }}" +
                 '<br/><br/><code>' + $('<div/>').text(mac).html() + '</code>',
                 "{{ lang._('Yes') }}", "{{ lang._('Cancel') }}", function () {
                     ajaxCall('/api/portguard/service/release', {'mac': mac}, function (data) {
