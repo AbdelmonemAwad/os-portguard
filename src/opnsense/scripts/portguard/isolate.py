@@ -57,8 +57,11 @@ for, a login. An exception's address it shows is kept out of the table instead.
 UNDO lets a device go at once, and it is not isolated again before its isolation would have ended (a
 device taken for infected by mistake keeps reaching the list, and would be isolated again the next
 minute), nor after that for the same entry: only once os-netreport records a newer "last" for one of
-its addresses. An isolation that expires is let go the same way, but for the end. Turning the option
-off lets every isolated device go.
+its addresses. An isolation that expires is let go the same way, but for the end, and so is every
+isolated device when the option is turned off, or one whose MAC address turns out to be the firewall's.
+Each is remembered in STATE's released with why (LET_GO), which the page shows for an entry not isolated
+again; turning the option off forgets none of them, so turned on again it does not isolate again a
+device that was undone, nor one it let go, for the same entry.
 
 WHICH DEVICE. An entry's device is the MAC address ARP or NDP shows at its address, where they show one -
 the kernel's view now, of a connection made in the last RECENT seconds - and otherwise the one
@@ -710,6 +713,28 @@ def released_last(entries, mac):
     return max([number(e.get('last')) for e in entries.values() if e['mac'] == mac] or [0])
 
 
+# why an isolated device was let go - kept with it in STATE's released, the reason the page gives for not
+# isolating it again - and as the system log says it
+LET_GO = {'undone': 'undone', 'expired': 'its time ran out', 'turned off': 'automatic isolation turned off',
+          'firewall MAC': 'its MAC address is this firewall\'s'}
+
+
+def release(released, mac, item, entries, why, until=0):
+    """An isolated device let go, remembered in STATE's released with why (LET_GO) against the newest "last"
+    of its entries: not isolated again before `until`, nor for an entry no newer than that (step())."""
+    released[mac] = {'last': max(released_last(entries, mac), number(item.get('last'))), 'until': until,
+                     'addresses': listed(item.get('addresses')), 'reason': why}
+
+
+def let_go_why(record):
+    """Why a device was let go, from its record in STATE's released - for a record an earlier build wrote
+    without one, 'undone' where it is held back until a time, 'expired' where it is not."""
+    why = record.get('reason') if isinstance(record, dict) else None
+    if why in LET_GO:
+        return why
+    return 'undone' if held_back(record, 0)[1] else 'expired'
+
+
 def step(state, entries, exc, on, hours, now):
     """One run's decisions, made on STATE: what is isolated, let go, and why some are not. Returns
     (isolated now, let go)."""
@@ -717,10 +742,11 @@ def step(state, entries, exc, on, hours, now):
     released = state.setdefault('released', {})
     gone = []
     if not on:
+        # every device let go, and remembered as such; the devices let go before are not forgotten: turned
+        # on again, the option isolates none of them again for the same entry - an undone one neither
         for mac in list(isolated):
+            release(released, mac, isolated.pop(mac), entries, 'turned off')
             gone.append(mac)
-            del isolated[mac]
-        released.clear()
         state['skipped'] = {}
         return [], gone
     table = exc.get('table') or {}
@@ -731,13 +757,12 @@ def step(state, entries, exc, on, hours, now):
         if now >= item['until']:
             why = 'expired'
         elif mac in exc.get('own_macs', ()):
-            why = 'this firewall'
+            why = 'firewall MAC'
         # and for nothing else: an exception's address it answers ARP for, an address it takes - it made
         # its MAC address "shared" with a second IPv4 one - or a connection it opened would have let it go.
         # Such an address is kept out of the table instead (held()).
         if why:
-            released[mac] = {'last': max(released_last(entries, mac), number(item.get('last'))), 'until': 0,
-                             'addresses': listed(item.get('addresses'))}
+            release(released, mac, item, entries, why)
             gone.append(mac)
             del isolated[mac]
         else:
@@ -771,7 +796,7 @@ def step(state, entries, exc, on, hours, now):
             continue
         let_go_last, let_go_until = held_back(released.get(mac), now)
         if mac in released and (now < let_go_until or last <= let_go_last):
-            skipped[entry['address']] = {'mac': mac, 'reason': 'undone', 'last': last,
+            skipped[entry['address']] = {'mac': mac, 'reason': let_go_why(released[mac]), 'last': last,
                                          'list': entry.get('list', ''), 'name': entry.get('name', '')}
             continue
         # a MAC address ARP shows with more than one IPv4 address now is isolated too, by its own
@@ -909,7 +934,7 @@ def commit(state, added, gone, summary, exc, alias, now):
             time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(item['until'])),
             '; a MAC address several devices share: only its own addresses held' if item.get('shared') else ''))
     for mac in gone:
-        log('isolation of %s ended' % mac)
+        log('isolation of %s ended: %s' % (mac, LET_GO[let_go_why((state.get('released') or {}).get(mac))]))
     save(STATE, state)
 
 
@@ -926,8 +951,9 @@ def do_run(now=None):
     on, hours = settings(root)
     state = load(STATE, {})
     summary = {'run': now, 'on': bool(on)}
-    # off, nothing isolated and nothing in the table: once a minute, nothing to write
-    if not on and not state.get('isolated') and not state.get('released') and not table_now():
+    # off, nothing isolated, nothing listed as not isolated and nothing in the table: once a minute, nothing
+    # to write. The devices let go stay remembered while it is off (step()).
+    if not on and not state.get('isolated') and not state.get('skipped') and not table_now():
         summary['message'] = 'isolate: off'
         return summary
     # one reading of ARP and NDP for the whole run: the entries' devices and the exceptions' MAC addresses
@@ -992,10 +1018,7 @@ def do_undo(mac, client, now=None):
         return {'status': 'failed', 'message': 'not isolated: %s' % (mac or 'no MAC address given')}
     # held back until the isolation would have ended: a device taken for infected by mistake keeps reaching
     # the list, and would be isolated again the next minute
-    state.setdefault('released', {})[mac] = {'last': max(released_last(infected(state, table), mac),
-                                                         number(item.get('last'))),
-                                             'until': number(item.get('until')),
-                                             'addresses': listed(item.get('addresses'))}
+    release(state.setdefault('released', {}), mac, item, infected(state, table), 'undone', number(item.get('until')))
     summary = {'status': 'ok', 'mac': mac}
     # the table written as a run writes it: never an exception's address - another isolated device may
     # answer ARP for a gateway's by now - and only while the alias is ready

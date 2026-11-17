@@ -82,6 +82,13 @@ def load(name):
     return module
 
 
+def volt_text():
+    """The page's template, as it is in the tree."""
+    with open(os.path.join(ROOT, 'src', 'opnsense', 'mvc', 'app', 'views', 'OPNsense', 'PortGuard', 'index.volt'),
+              encoding='utf-8') as fh:
+        return fh.read()
+
+
 fixture('ifconfig', 'igb0: flags=8843<UP> mtu 1500\n\tether %s\n\tinet 192.0.2.1 netmask 0xffffff00 broadcast 192.0.2.255\n'
         '\tinet6 fe80::1%%igb0 prefixlen 64 scopeid 0x1\n\tinet6 2001:db8::1 prefixlen 64\n'
         'igb1: flags=8843<UP> mtu 1500\n\tether 02:00:00:00:00:02\n\tinet 203.0.113.2 netmask 0xffffff00\n' % FW_MAC)
@@ -571,6 +578,7 @@ fixture('ifconfig', IFCONFIG_TEXT + 'igb2: flags=8843<UP> mtu 1500\n\tether %s\n
 answer = iso.do_run(NOW + 1460)
 fixture('ifconfig', IFCONFIG_TEXT)
 check('its MAC address the firewall\'s own: let go', (answer.get('let_go'), ONE_MAC in state()['isolated']), ([ONE_MAC], False))
+check('... remembered as let go for that', state()['released'][ONE_MAC]['reason'], 'firewall MAC')
 # an address held for it that another device has now (ARP shows it there): no longer held
 os.remove(iso.STATE)
 fixture('arp', ARP_TEXT + arp_line('192.0.2.86', TWO_MAC))
@@ -841,6 +849,51 @@ try:
 finally:
     iso.socket.getaddrinfo, iso.RESOLVE_WAIT = real_getaddrinfo, saved_resolve_wait
 config(auto='1', hours='2')
+
+# ---------------------------------------------------------------- why a device was let go, kept with it
+
+# an isolation that ran out while the device still reaches the list: let go as expired, and said so - not "undone"
+config(auto='1', hours='1')
+if os.path.exists(iso.STATE):
+    os.remove(iso.STATE)
+infected({'192.0.2.66': entry(NOW, BAD_MAC)})
+iso.do_run(NOW + 10)
+infected({'192.0.2.66': entry(NOW + 3600, BAD_MAC)})
+n = len(logged)
+iso.do_run(NOW + 3610)
+reasons = {r['address']: r['reason'] for r in iso.do_list('', NOW + 3615)['not_isolated']}
+check('an isolation that ran out: let go as such - the record, the page\'s reason and the system log say it, not '
+      '"undone"', (BAD_MAC in state()['isolated'], state()['released'][BAD_MAC]['reason'], reasons.get('192.0.2.66'),
+                   ('isolation of %s ended: its time ran out' % BAD_MAC) in logged[n:]), (False, 'expired', 'expired', True))
+# turned off: the isolated device let go as such, and an undone one's record kept - turned on again, the entries
+# unchanged, neither is isolated again, each with its own reason
+config(auto='1', hours='2')
+os.remove(iso.STATE)
+infected({'192.0.2.66': entry(NOW, BAD_MAC), '192.0.2.67': entry(NOW, BAD2_MAC)})
+iso.do_run(NOW + 10)
+iso.do_undo(BAD2_MAC, '', NOW + 20)
+config(auto='0')
+iso.do_run(NOW + 30)
+check('turned off: the isolated device let go as such, the undone one\'s record kept',
+      {m: r.get('reason') for m, r in state()['released'].items()}, {BAD_MAC: 'turned off', BAD2_MAC: 'undone'})
+config(auto='1', hours='2')
+iso.do_run(NOW + 40)
+check('turned on again, the entries unchanged: neither isolated again, each with its reason',
+      (state()['isolated'], {a: s['reason'] for a, s in state()['skipped'].items()}),
+      ({}, {'192.0.2.66': 'turned off', '192.0.2.67': 'undone'}))
+config(auto='0')
+iso.do_run(NOW + 45)
+check('turned off with nothing isolated: the rows of what was not isolated cleared all the same',
+      state().get('skipped'), {})
+config(auto='1', hours='2')
+infected({'192.0.2.66': entry(NOW + 50, BAD_MAC), '192.0.2.67': entry(NOW + 50, BAD2_MAC)})
+iso.do_run(NOW + 60)
+check('... a newer connection: the one let go at turning off isolated again, the undone one not before its isolation '
+      'would have ended', sorted(state()['isolated']), [BAD_MAC])
+check('the page words each reason a device was let go for', all("'%s': \"{{ lang._(" % r in volt_text() for r in (
+    'undone', 'expired', 'turned off', 'firewall MAC')), True)
+os.remove(iso.STATE)
+infected({})
 
 # ---------------------------------------------------------------- config.xml read once, under OPNsense's lock
 

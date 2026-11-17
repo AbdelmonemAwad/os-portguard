@@ -168,7 +168,10 @@
             'the address this page is opened from': "{{ lang._('not isolated: an address this page was opened from') }}",
             'the HA peer': "{{ lang._('not isolated: the HA peer') }}",
             'logged in to the web GUI or SSH of this firewall': "{{ lang._('not isolated: logged in to the web GUI or SSH of this firewall') }}",
-            'undone': "{{ lang._('not isolated again: undone, until its isolation would have ended and a newer connection') }}"
+            'undone': "{{ lang._('not isolated again: undone, until its isolation would have ended and a newer connection') }}",
+            'expired': "{{ lang._('not isolated again: its isolation ended, until a newer connection') }}",
+            'turned off': "{{ lang._('not isolated again: let go when automatic isolation was turned off, until a newer connection') }}",
+            'firewall MAC': "{{ lang._('not isolated again: let go as a MAC address of this firewall, until a newer connection') }}"
         };
 
         function when(seconds) {
