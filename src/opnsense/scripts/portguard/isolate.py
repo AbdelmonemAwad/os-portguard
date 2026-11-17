@@ -39,16 +39,17 @@ address from then on. A router that translates addresses shows one IPv4 address 
 
 NEVER ISOLATED - a fixed exception, checked at every run: the firewall's own addresses and MAC addresses
 (ifconfig), its gateways' addresses (config.xml, the routers OPNsense keeps for dynamic gateways in
-/tmp, the default routes), its HA peer (config.xml's hasync), every address with a connection open to
-its web GUI or SSH port (pf's states), every address the page was opened from in the last MANAGER_DAYS
-days - the page passes its client address ($_SERVER['REMOTE_ADDR']) on each reading - and the MAC
-addresses ARP and NDP show at any of those. A link-local address counts for none of these: fe80::1 is a
+/tmp, the default routes), its HA peer (config.xml's hasync), every address logged in to its SSH (utmpx,
+as who(1) prints it) or to its web GUI within the GUI's session timeout (the audit log's logins), every
+address the page was opened from in the last MANAGER_DAYS days - the page passes its client address
+($_SERVER['REMOTE_ADDR']) on each reading - and the MAC addresses ARP and NDP show at any of those. A
+connection is not a login: a device scanning the GUI's or SSH's port opens one. A link-local address counts for none of these: fe80::1 is a
 neighbour of every segment, and an isolated device keeps its own, which no table holds.
 
 ONCE ISOLATED, a device is let go only when its isolation ends, by Undo, when the option is turned off,
 or when its MAC address turns out to be the firewall's own - never for something it can do itself: an
 address it takes (two IPv4 addresses make a MAC address shared), an exception's address it answers ARP
-for, a connection it opens. An exception's address it shows is kept out of the table instead.
+for, a login. An exception's address it shows is kept out of the table instead.
 
 UNDO lets a device go at once, and it is not isolated again before its isolation would have ended (a
 device taken for infected by mistake keeps reaching the list, and would be isolated again the next
@@ -67,6 +68,7 @@ stays isolated with nothing on the page to undo it.
 Never fails its caller: prints one JSON object and exits 0; what it could not do is in the answer and
 in the system log, under portguard.
 """
+import calendar
 import fcntl
 import ipaddress
 import json
@@ -89,8 +91,14 @@ ARP = '/usr/sbin/arp'
 NDP = '/usr/sbin/ndp'
 ROUTE = '/sbin/route'
 PFCTL = '/sbin/pfctl'
+WHO = '/usr/bin/who'
 CUT = '/usr/local/opnsense/scripts/portguard/cut.py'
 ROUTERS = '/tmp'            # OPNsense's <interface>_router and _routerv6 files: a dynamic gateway's address
+# OPNsense's audit log, a file a day: where its web GUI writes each login (os-netreport's alerts.py reads
+# its failed ones in the same file, its AUDIT_LOG)
+AUDIT_LOG = '/var/log/audit/audit_{day}.log'
+AUDIT_READ = 16 * 1024 * 1024   # bytes read from the end of one day's audit log at most
+GUI_MINUTES = 240               # OPNsense's GUI session timeout where system/webgui/session_timeout is empty
 TAG = 'portguard'
 RECENT = 600                # an entry is acted on while its latest blocked connection is this recent
 DEFAULT_HOURS = 24
@@ -280,9 +288,9 @@ def neighbour_key(addr):
 
 
 def link_local(ip):
-    """Whether an address (as norm_ip() gives it) is link-local: fe80::/10 or 169.254/16."""
+    """Whether an address - with a scope or without - is link-local: fe80::/10 or 169.254/16."""
     try:
-        return ipaddress.ip_address(ip).is_link_local
+        return ipaddress.ip_address(norm_ip(ip)).is_link_local
     except ValueError:
         return False
 
@@ -324,26 +332,94 @@ def neighbours():
     return out
 
 
-def config_ports(root):
-    """The web GUI's and SSH's ports, from config.xml: 443 or 80 by the GUI's protocol, and 22, where it
-    says none."""
-    gui = (root.findtext('system/webgui/port') or '').strip()
-    if not gui:
-        gui = '80' if (root.findtext('system/webgui/protocol') or 'https').strip() == 'http' else '443'
-    ssh = (root.findtext('system/ssh/port') or '').strip()
-    return {p for p in (gui or '443', ssh or '22') if p.isdigit()}
+def ssh_logins():
+    """The addresses logged in to this firewall's SSH now, as neighbour_key() gives them: utmpx's records of
+    the users logged in, as who(1) prints them - "root  pts/0  Nov 17 10:00 (192.0.2.50)", the remote host
+    last, in parentheses. sshd writes one for a session with a terminal. A host name (sshd's UseDNS) is not
+    an address and is not taken."""
+    out = set()
+    for line in run_cmd([WHO]).splitlines():
+        found = re.search(r'\(([^()\s]+)\)\s*$', line)
+        key = neighbour_key(found.group(1)) if found else ''
+        if key:
+            out.add(key)
+    return out
 
 
-def managing(root, mine):
-    """The addresses with a connection open to this firewall's web GUI or SSH port, from pf's states
-    ("all tcp 192.0.2.1:443 <- 192.0.2.50:51515", an IPv6 one "2001:db8::1[22] <- ...")."""
-    ports, out = config_ports(root), set()
-    for line in run_cmd([PFCTL, '-ss']).splitlines():
-        found = re.search(r'\stcp\s+(\S+?)(?::(\d+)|\[(\d+)\])\s+<-\s+(\S+?)(?::\d+|\[\d+\])\s', line)
-        if found and norm_ip(found.group(1)) in mine and (found.group(2) or found.group(3)) in ports:
-            ip = norm_ip(found.group(4))
-            if ip:
-                out.add(ip)
+# OPNsense 26.7's web GUI at a login (authgui.inc:184-186): "<page>: Successful login for user '<name>' from:
+# <address>"; the address is taken from the end, as a user name can hold anything
+GUI_LOGIN = re.compile(r"Successful login for user '.*' from: (?P<address>[0-9A-Fa-f:.]+(?:%[\w.]+)?)\s*$")
+STAMP = re.compile(r'^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.\d+)?(Z|[+-]\d\d:?\d\d)$')
+
+
+def stamp(text):
+    """An RFC 5424 time (2026-11-17T10:00:00.123+04:00) as Unix seconds; None for anything else."""
+    found = STAMP.match(text or '')
+    if not found:
+        return None
+    try:
+        seconds = calendar.timegm(tuple(int(v) for v in found.groups()[:6]) + (0, 0, 0))
+    except (ValueError, OverflowError):
+        return None
+    zone = found.group(7)
+    if zone != 'Z':
+        offset = int(zone[1:3]) * 3600 + int(zone[-2:]) * 60
+        seconds -= offset if zone[0] == '+' else -offset
+    return seconds
+
+
+def audit_files(now, window):
+    """The audit log's files that can hold a line of the last `window` seconds: one a day, named for its
+    day - local time, or UTC."""
+    days, t = set(), now - window
+    while True:
+        days.update(time.strftime('%Y%m%d', f(t)) for f in (time.localtime, time.gmtime))
+        if t >= now:
+            break
+        t = min(t + 3600, now)
+    return [AUDIT_LOG.format(day=day) for day in sorted(days)]
+
+
+def tail(path, limit):
+    """A file's lines, as bytes, from its last `limit` bytes - a first line that limit cut left out; []
+    where it cannot be read."""
+    try:
+        with open(path, 'rb') as fh:
+            size = fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, size - limit))
+            lines = fh.read().split(b'\n')
+    except OSError:
+        return []
+    return lines[1:] if size > limit else lines
+
+
+def gui_logins(root, now):
+    """The addresses logged in to this firewall's web GUI within its session timeout, as neighbour_key()
+    gives them. OPNsense writes
+    "Successful login for user '<name>' from: <address>" into its audit log at each login (authgui.inc:184-186,
+    through auth_log(): the program "audit", auth.inc:37-42) - unless "Disable logging of web GUI successful
+    logins" is set (system/webgui/quietlogin), when none is found here and only the page's client address
+    counts. A session left unused for system/webgui/session_timeout minutes - 240 where empty - is ended
+    (authgui.inc:219-236, ControllerRoot.php:131-160), so a login longer ago than that is not counted, nor
+    one longer ago than MANAGER_DAYS. The log's lines are RFC 5424 ("<pri>1 time host program pid msgid sd
+    message"); the newest AUDIT_READ bytes of a day's file are read."""
+    try:
+        minutes = float((root.findtext('system/webgui/session_timeout') or '').strip() or GUI_MINUTES)
+    except ValueError:
+        minutes = GUI_MINUTES
+    window = int(min((minutes if minutes > 0 else GUI_MINUTES) * 60, MANAGER_DAYS * 86400))
+    out = set()
+    for path in audit_files(now, window):
+        for raw in tail(path, AUDIT_READ):
+            if b'Successful login for user' not in raw:
+                continue
+            parts = raw.decode('utf-8', 'replace').rstrip('\r').split(' ', 6)
+            if len(parts) < 7 or not re.match(r'^<\d+>1$', parts[0]) or parts[3] != 'audit':
+                continue
+            at, found = stamp(parts[1]), GUI_LOGIN.search(parts[6])
+            key = neighbour_key(found.group('address')) if found else ''
+            if at is not None and -AHEAD <= now - at <= window and key:
+                out.add(key)
     return out
 
 
@@ -384,10 +460,11 @@ def exceptions(root, state, now, table=None):
     add(mine, 'this firewall')
     add(gateways(root), 'a gateway')
     add(ha_peers(root), 'the HA peer')
-    # a link-local source counts for nothing here: fe80::1 is a neighbour of every segment, and an
-    # isolated device keeps its own, which no table holds
-    add([ip for ip in managing(root, mine) if not link_local(ip)],
-        'a connection to the web GUI or SSH of this firewall')
+    # a login, not a connection: a device scanning the GUI's or SSH's port opens one, and the
+    # anti-lockout rule lets it. A link-local source counts for nothing here: fe80::1 is a neighbour of
+    # every segment, and an isolated device keeps its own, which no table holds.
+    add([key for key in ssh_logins() | gui_logins(root, now) if not link_local(key)],
+        'logged in to the web GUI or SSH of this firewall')
     for ip, seen in (state.get('managers') or {}).items():
         if not isinstance(seen, dict) or now - number(seen.get('at')) > MANAGER_DAYS * 86400 or link_local(ip):
             continue
@@ -549,7 +626,7 @@ def step(state, entries, exc, on, hours, now):
         elif mac in exc.get('own_macs', ()):
             why = 'this firewall'
         # and for nothing else: an exception's address it answers ARP for, an address it takes - it made
-        # its MAC address "shared" with a second IPv4 one - or a connection it opens would have let it go.
+        # its MAC address "shared" with a second IPv4 one - or a connection it opened would have let it go.
         # Such an address is kept out of the table instead (held()).
         if why:
             released[mac] = {'last': max(released_last(entries, mac), number(item.get('last'))), 'until': 0,

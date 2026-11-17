@@ -167,7 +167,7 @@
             'a gateway': "{{ lang._('not isolated: a gateway') }}",
             'the address this page is opened from': "{{ lang._('not isolated: an address this page was opened from') }}",
             'the HA peer': "{{ lang._('not isolated: the HA peer') }}",
-            'a connection to the web GUI or SSH of this firewall': "{{ lang._('not isolated: a connection to the web GUI or SSH of this firewall') }}",
+            'logged in to the web GUI or SSH of this firewall': "{{ lang._('not isolated: logged in to the web GUI or SSH of this firewall') }}",
             'undone': "{{ lang._('not isolated again: undone, until its isolation would have ended and a newer connection') }}"
         };
 

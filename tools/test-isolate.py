@@ -28,6 +28,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -96,6 +97,11 @@ tool('ifconfig', 'cat "%s/ifconfig"' % FIX)
 tool('arp', 'cat "%s/arp"' % FIX)
 tool('ndp', 'cat "%s/ndp"' % FIX)
 tool('route', 'case "$*" in *-inet6*) cat "%s/route-inet6" ;; *) cat "%s/route-inet" ;; esac' % (FIX, FIX))
+# who(1): the users logged in, utmpx's records (none here until a test says); the audit log, a file a day
+fixture('who', '')
+tool('who', 'cat "%s/who"' % FIX)
+AUDIT = os.path.join(TOP, 'audit')
+os.makedirs(AUDIT)
 with open(os.path.join(ROUTERS, 'igb2_routerv6'), 'w', encoding='utf-8') as fh:
     fh.write('2001:db8:ffff::1\n')
 with open(os.path.join(ROUTERS, 'igb0_nameserver'), 'w', encoding='utf-8') as fh:
@@ -111,6 +117,9 @@ with open(pf, 'w', encoding='utf-8') as fh:
     fh.write('''import json, os, sys
 table, writes, args = sys.argv[1], sys.argv[2], sys.argv[3:]
 if args[:1] == ['-ss']:
+    # pf's states, which isolate.py no longer reads: a half-open one to the firewall's SSH is no login
+    states = os.path.join(os.path.dirname(table), 'fixtures', 'states-pf')
+    sys.stdout.write(open(states).read() if os.path.exists(states) else '')
     sys.exit(0)
 if args[:2] != ['-t', 'portguard_isolated'] or not os.path.exists(table):
     sys.stderr.write('pfctl: Table does not exist.\\n')
@@ -170,6 +179,7 @@ iso.STATE = os.path.join(iso.STATE_DIR, 'isolate.json')
 iso.LOCK = os.path.join(iso.STATE_DIR, 'isolate.lock')
 iso.IFCONFIG, iso.ARP, iso.NDP, iso.ROUTE = (os.path.join(BIN, n) for n in ('ifconfig', 'arp', 'ndp', 'route'))
 iso.PFCTL, iso.CUT = os.path.join(BIN, 'pfctl-table'), os.path.join(BIN, 'cut-standin')
+iso.WHO, iso.AUDIT_LOG = os.path.join(BIN, 'who'), os.path.join(AUDIT, 'audit_{day}.log')
 logged = []
 iso.log = logged.append
 os.makedirs(iso.STATE_DIR)
@@ -432,22 +442,17 @@ fixture('ndp', NDP_BEFORE + 'fe80::1%igb0                         02:00:00:00:00
 check('NDP: a link-local address keeps its scope - two neighbours, two MAC addresses',
       sorted((k, v) for k, v in iso.neighbours().items() if k.startswith('fe80::1%')),
       [('fe80::1%igb0', GW_MAC), ('fe80::1%igb1', PC_MAC)])
-# pf's states: one to the GUI's port, one to SSH's, one to another port of the firewall, and one through it
-tool('pfctl-states', 'cat <<EOF\n'
-     'all tcp 192.0.2.1:443 <- 192.0.2.80:51515       ESTABLISHED:ESTABLISHED\n'
-     'all tcp 2001:db8::1[22] <- 2001:db8::81[52525]       ESTABLISHED:ESTABLISHED\n'
-     'all udp 192.0.2.1:53 <- 192.0.2.81:53535       SINGLE:MULTIPLE\n'
-     'all tcp 198.51.100.7:443 <- 192.0.2.81:54545       ESTABLISHED:ESTABLISHED\n'
-     'EOF')
-saved_pfctl, iso.PFCTL = iso.PFCTL, os.path.join(BIN, 'pfctl-states')
+# a login, not a connection: an SSH session from 192.0.2.80 (utmpx, as who prints it); pf's states - a half-open
+# one from 192.0.2.81 to the firewall's SSH, the anti-lockout rule's - count for nothing
+fixture('who', 'root             pts/0        Nov 17 10:00 (192.0.2.80)\n')
+fixture('states-pf', 'all tcp 192.0.2.1:22 <- 192.0.2.81:40000       CLOSED:SYN_SENT\n'
+        'all tcp 192.0.2.1:443 <- 192.0.2.81:40001       ESTABLISHED:ESTABLISHED\n')
 config(auto='1', hours='2')
 with open(CONFIG, encoding='utf-8') as fh:
     text = fh.read()
 with open(CONFIG, 'w', encoding='utf-8') as fh:
     fh.write(text.replace('<opnsense>', '<opnsense><hasync><pfsyncpeerip>192.0.2.95</pfsyncpeerip></hasync>', 1))
 try:
-    check('the addresses with a connection open to the GUI or SSH port, IPv4 and IPv6; not another port, not '
-          'through the firewall', sorted(iso.managing(iso.read_config(), iso.own()[0])), ['192.0.2.80', '2001:db8::81'])
     check('the HA peer, from config.xml', sorted(iso.ha_peers(iso.read_config())), ['192.0.2.95'])
     if os.path.exists(iso.STATE):
         os.remove(iso.STATE)
@@ -460,23 +465,24 @@ try:
         fh.write(text.replace('<gateway>203.0.113.1</gateway>', '<gateway>203.0.113.9</gateway>'))
     iso.do_run(NOW + 110)
     skipped = state()['skipped']
-    check('not isolated: one whose other address is the gateway; a connection to the GUI; the HA peer - each with '
-          'why; a connection to another port is isolated, and so is a MAC address two IPv4 addresses share',
-          ({a: skipped[a]['reason'] for a in skipped}, sorted(state()['isolated'])),
-          ({'192.0.2.93': 'a gateway', '192.0.2.80': 'a connection to the web GUI or SSH of this firewall',
+    check('not isolated: one whose other address is the gateway; one logged in to SSH; the HA peer - each with why; '
+          'one with only connections to the firewall\'s SSH and GUI is isolated, and so is a MAC address two IPv4 '
+          'addresses share', ({a: skipped[a]['reason'] for a in skipped}, sorted(state()['isolated'])),
+          ({'192.0.2.93': 'a gateway', '192.0.2.80': 'logged in to the web GUI or SSH of this firewall',
             '192.0.2.95': 'the HA peer'}, [SHARED_MAC, '02:00:00:00:77:04']))
     item = state()['isolated'].get(SHARED_MAC, {})
     check('... the shared one by the address that reached the list only, not its other client\'s',
           (item.get('shared'), item.get('held')), (True, ['192.0.2.91']))
 finally:
-    iso.PFCTL = saved_pfctl
+    fixture('who', '')
+    fixture('states-pf', '')
     fixture('arp', ARP_BEFORE)
     fixture('ndp', NDP_BEFORE)
 with open(os.path.join(ROOT, 'src', 'opnsense', 'mvc', 'app', 'views', 'OPNsense', 'PortGuard', 'index.volt'),
           encoding='utf-8') as fh:
     volt = fh.read()
 check('the page words each new reason', all("'%s': \"{{ lang._(" % r in volt for r in (
-    'the HA peer', 'a connection to the web GUI or SSH of this firewall')), True)
+    'the HA peer', 'logged in to the web GUI or SSH of this firewall')), True)
 check('the page: a row shows what is held for it, says when no address of it is seen now and when it is shared',
       ["((d.holding || []).length ? d.holding : (d.addresses || [])).join(' ')" in volt,
        "if (!(d.addresses_now || []).length) {" in volt, 'if (d.shared) {' in volt], [True, True, True])
@@ -595,6 +601,73 @@ with open(CONFIG, 'w', encoding='utf-8') as fh:
 fixture('route-inet6', 'route: route has not been found\n')
 fixture('arp', ARP_TEXT)
 fixture('ndp', NDP_BEFORE)
+os.remove(iso.STATE)
+infected({})
+
+# ---------------------------------------------------------------- the GUI's and SSH's exception: a login
+
+fixture('who', 'root             pts/0        Nov 17 10:00 (192.0.2.80)\n'
+        'admin            pts/1        Nov 17 10:05 (2001:db8::81)\n'
+        'root             ttyu0        Nov 17 09:00\n'
+        'root             pts/2        Nov 17 10:10 (fe80::66%igb0)\n'
+        'root             pts/3        Nov 17 10:11 (admin-pc.example.net)\n')
+check('SSH: the addresses utmpx shows logged in (who), a link-local one with its scope; not the console or a host '
+      'name', sorted(iso.ssh_logins()), ['192.0.2.80', '2001:db8::81', 'fe80::66%igb0'])
+fixture('who', '')
+
+
+def audit(when, program, message):
+    """A line of OPNsense's audit log, RFC 5424, into the file of its day."""
+    path = iso.AUDIT_LOG.format(day=time.strftime('%Y%m%d', time.gmtime(when)))
+    with open(path, 'a', encoding='utf-8') as fh:
+        fh.write('<38>1 %s fw.example.net %s 4242 - [meta sequenceId="1"] %s\n' % (
+            time.strftime('%Y-%m-%dT%H:%M:%S+00:00', time.gmtime(when)), program, message))
+
+
+LOGIN = "/index.php: Successful login for user 'root' from: %s"
+audit(NOW - 600, 'audit', LOGIN % '192.0.2.82')                 # ten minutes ago: the day before's file
+audit(NOW - 5 * 3600, 'audit', LOGIN % '192.0.2.83')            # five hours ago: past the session timeout
+audit(NOW - 300, 'audit', "/index.php: Web GUI authentication error for 'root' from 192.0.2.84")
+audit(NOW - 300, 'audit', 'user root could not authenticate for WebGui. [using x + y]')
+audit(NOW - 300, 'lighttpd', LOGIN % '192.0.2.85')              # another program's line
+audit(NOW - 300, 'audit', LOGIN % 'fe80::86')                   # a link-local address
+audit(NOW - 300, 'audit', LOGIN % "192.0.2.99' from: 192.0.2.87")   # a user name made to look like an address
+audit(NOW + 60, 'audit', "/index.php: Successful login for user 'root' from: 192.0.2.89 extra")
+with open(iso.AUDIT_LOG.format(day=time.strftime('%Y%m%d', time.gmtime(NOW))), 'a', encoding='utf-8') as fh:
+    fh.write("<38>1 not-a-time fw.example.net audit 4242 - - %s\n" % (LOGIN % '192.0.2.88'))
+check('GUI: the logins of the audit log within the session timeout (240 minutes); not an older one, a failed one, '
+      'another program\'s; the address taken from the end', sorted(iso.gui_logins(iso.read_config(), NOW)),
+      ['192.0.2.82', '192.0.2.87', 'fe80::86'])
+with open(CONFIG, encoding='utf-8') as fh:
+    whole = fh.read()
+with open(CONFIG, 'w', encoding='utf-8') as fh:
+    fh.write(whole.replace('<opnsense>', '<opnsense><system><webgui><session_timeout>600</session_timeout></webgui>'
+                                         '</system>', 1))
+check('GUI: a session timeout of 600 minutes set - the login five hours ago counts too',
+      sorted(iso.gui_logins(iso.read_config(), NOW)), ['192.0.2.82', '192.0.2.83', '192.0.2.87', 'fe80::86'])
+with open(CONFIG, 'w', encoding='utf-8') as fh:
+    fh.write(whole)
+check('an RFC 5424 time as Unix seconds, its offset taken off', [iso.stamp(t) for t in (
+    '2025-11-17T04:00:00+04:00', '2025-11-17T00:00:00.123456Z', '2025-11-16T19:00:00-0500', '2025-13-01T00:00:00Z', 'x')],
+      [NOW, NOW, NOW, None, None])
+# a device logged in to the GUI is not isolated, nor one logged in to SSH; an isolated device's link-local SSH login
+# lets it go no more than anything else it does
+fixture('arp', ARP_TEXT + arp_line('192.0.2.82', TWO_MAC) + arp_line('192.0.2.88', ONE_MAC))
+fixture('ndp', NDP_BEFORE + ndp_line('fe80::88%igb0', ONE_MAC))
+fixture('who', 'root             pts/0        Nov 17 10:00 (fe80::88%igb0)\n')
+infected({'192.0.2.82': entry(NOW - 30, TWO_MAC), '192.0.2.88': entry(NOW - 30, ONE_MAC)})
+iso.do_run(NOW)
+check('logged in to the GUI: not isolated, with why; one logged in to SSH from its link-local address only is',
+      (state()['skipped'].get('192.0.2.82', {}).get('reason'), sorted(state()['isolated'])),
+      ('logged in to the web GUI or SSH of this firewall', [ONE_MAC]))
+answer = iso.do_run(NOW + 60)
+check('an isolated device logged in to SSH from its link-local address: not let go', (answer.get('let_go'),
+      ONE_MAC in state()['isolated']), ([], True))
+fixture('who', '')
+fixture('arp', ARP_TEXT)
+fixture('ndp', NDP_BEFORE)
+for name in os.listdir(AUDIT):
+    os.remove(os.path.join(AUDIT, name))
 os.remove(iso.STATE)
 infected({})
 
