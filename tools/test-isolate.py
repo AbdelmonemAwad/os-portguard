@@ -305,6 +305,55 @@ check('main: unknown command answers in JSON', subprocess.run(
      'isolate.LOCK = %r; isolate.main(["nonsense"])' % (SCRIPTS, iso.STATE_DIR, iso.LOCK)],
     capture_output=True, text=True).stdout.strip().startswith('{"message": "usage'), True)
 
+# ---------------------------------------------------------------- the review's small findings (2026-11-17)
+
+config(auto='1', hours='2')
+if os.path.exists(iso.STATE):
+    os.remove(iso.STATE)
+infected({'192.0.2.66': entry(NOW, BAD_MAC)})
+iso.do_run(NOW + 10)
+# a "last" os-netreport's file holds as a date: neither the run nor Undo stops
+infected({'192.0.2.66': dict(entry(NOW, BAD_MAC), last='2026-11-17T10:00:00Z')})
+answer = iso.do_run(NOW + 20)
+check('a "last" written as a date: the run goes on, the device stays isolated',
+      ('stopped' in (answer.get('message') or ''), BAD_MAC in state()['isolated']), (False, True))
+check('... and Undo goes through', iso.do_undo(BAD_MAC, '', NOW + 30).get('status'), 'ok')
+check('a broadcast, a multicast or a zero MAC address is no one device\'s',
+      [iso.norm_mac(m) for m in ('ff:ff:ff:ff:ff:ff', '01:00:5e:00:00:01', '00:00:00:00:00:00', BAD_MAC)],
+      ['', '', '', BAD_MAC])
+check('an IPv4 address an IPv6 one carries is read as IPv4', iso.norm_ip('::ffff:192.0.2.50'), '192.0.2.50')
+# a "last" ahead of this clock is no recent connection
+infected({'192.0.2.67': entry(NOW + 3600, BAD2_MAC)})
+iso.do_run(NOW + 40)
+check('a "last" an hour ahead of the clock: not isolated', BAD2_MAC in state()['isolated'], False)
+# a shorter duration set: an isolation held to it, from now
+infected({'192.0.2.67': entry(NOW + 40, BAD2_MAC)})
+iso.do_run(NOW + 50)
+config(auto='1', hours='1')
+iso.do_run(NOW + 60)
+check('a shorter duration set: the isolation held to it, from now', state()['isolated'][BAD2_MAC]['until'],
+      NOW + 60 + 3600)
+# ifconfig that answers nothing: the firewall could take itself for a device - nothing new isolated, said
+tool('nothing', 'true')
+saved_ifconfig, iso.IFCONFIG = iso.IFCONFIG, os.path.join(BIN, 'nothing')
+infected({'192.0.2.67': entry(NOW + 40, BAD2_MAC), '192.0.2.68': entry(NOW + 60, '02:00:00:00:66:03')})
+try:
+    answer = iso.do_run(NOW + 70)
+finally:
+    iso.IFCONFIG = saved_ifconfig
+check("ifconfig that answers nothing: nothing new isolated, said; the isolated one stays",
+      ('02:00:00:00:66:03' in state()['isolated'], BAD2_MAC in state()['isolated'], answer.get('message')),
+      (False, True, "isolate: this firewall's own addresses could not be read; nothing new isolated"))
+# the page: a list that could not be read is said so, not drawn as "off" and empty; names through plain()
+with open(os.path.join(ROOT, 'src', 'opnsense', 'mvc', 'app', 'views', 'OPNsense', 'PortGuard', 'index.volt'),
+          encoding='utf-8') as fh:
+    volt = fh.read()
+check('the page: a list that could not be read is an error, not "off"',
+      "data.status === 'failed' || typeof data.on !== 'boolean'" in volt, True)
+check('the page: device names through plain()', volt.count("text(plain(d.name || ''))"), 2)
+os.remove(iso.STATE)
+infected({})
+
 # ---------------------------------------------------------------- cut.py, the isolated table
 
 KILLS = os.path.join(TOP, 'kills')

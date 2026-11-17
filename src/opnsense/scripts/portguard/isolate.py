@@ -69,6 +69,7 @@ DEFAULT_HOURS = 24
 MAX_HOURS = 720
 MANAGER_DAYS = 7            # how long an address the page was opened from stays an exception
 WAIT = 10                   # seconds a run waits for another to end
+AHEAD = 300                 # a "last" further ahead of this clock than this is no recent connection
 MAC = re.compile(r'^[0-9a-f]{2}(:[0-9a-f]{2}){5}$')
 
 
@@ -87,16 +88,36 @@ def run_cmd(args, timeout=30):
 
 
 def norm_mac(mac):
+    """A MAC address as one text; '' for anything else, and for a group address (broadcast,
+    multicast: the first octet's lowest bit) or none at all (zeros), which no one device has."""
     mac = (mac or '').strip().lower().replace('-', ':')
-    return mac if MAC.match(mac) else ''
+    if not MAC.match(mac) or int(mac[:2], 16) & 1 or mac == '00:00:00:00:00:00':
+        return ''
+    return mac
 
 
 def norm_ip(addr):
-    """An address as one text, without a scope (fe80::1%igb0) or a mask; '' for anything else."""
+    """An address as one text, without a scope (fe80::1%igb0) or a mask, an IPv4 address an IPv6
+    one carries (::ffff:192.0.2.5) as IPv4; '' for anything else."""
     try:
-        return str(ipaddress.ip_address(str(addr or '').split('%')[0].split('/')[0].strip()))
+        ip = ipaddress.ip_address(str(addr or '').split('%')[0].split('/')[0].strip())
     except ValueError:
         return ''
+    return str(ip.ipv4_mapped if ip.version == 6 and ip.ipv4_mapped else ip)
+
+
+def number(value):
+    """A time as os-netreport or STATE keeps it, as an integer; 0 for anything else (a date written as
+    text, a list): one bad value must stop neither a run nor an undo."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def listed(value):
+    """A list of texts as STATE keeps it; [] for anything else."""
+    return [str(v) for v in value] if isinstance(value, list) else []
 
 
 def load(path, default):
@@ -209,6 +230,7 @@ def exceptions(state, now):
     addr, mac = {}, {}
     table = neighbours()
     mine, my_macs = own()
+    blind = not mine or not my_macs
     for ip in mine:
         addr[ip] = 'this firewall'
     for m in my_macs:
@@ -218,12 +240,12 @@ def exceptions(state, now):
         if table.get(ip):
             mac.setdefault(table[ip], 'a gateway')
     for ip, seen in (state.get('managers') or {}).items():
-        if not isinstance(seen, dict) or now - (seen.get('at') or 0) > MANAGER_DAYS * 86400:
+        if not isinstance(seen, dict) or now - number(seen.get('at')) > MANAGER_DAYS * 86400:
             continue
         addr.setdefault(ip, 'the address this page is opened from')
         for m in filter(None, (norm_mac(seen.get('mac')), table.get(ip))):
             mac.setdefault(m, 'the address this page is opened from')
-    return {'addr': addr, 'mac': mac}
+    return {'addr': addr, 'mac': mac, 'blind': blind}
 
 
 def remember_client(state, client, now):
@@ -233,7 +255,8 @@ def remember_client(state, client, now):
         return False
     managers = state.setdefault('managers', {})
     managers[ip] = {'at': now, 'mac': neighbours().get(ip, '') or (managers.get(ip) or {}).get('mac', '')}
-    for old in [k for k, v in managers.items() if now - ((v or {}).get('at') or 0) > MANAGER_DAYS * 86400]:
+    for old in [k for k, v in managers.items()
+                if not isinstance(v, dict) or now - number(v.get('at')) > MANAGER_DAYS * 86400]:
         del managers[old]
     return True
 
@@ -271,7 +294,7 @@ def why_not(entry, exc):
 def released_last(entries, mac):
     """The newest "last" among os-netreport's entries of this MAC address: an undone or expired device
     is isolated again only for a newer one."""
-    return max([int(e.get('last') or 0) for e in entries.values() if e['mac'] == mac] or [0])
+    return max([number(e.get('last')) for e in entries.values() if e['mac'] == mac] or [0])
 
 
 def step(state, entries, exc, on, hours, now):
@@ -289,21 +312,27 @@ def step(state, entries, exc, on, hours, now):
         return [], gone
     for mac, item in list(isolated.items()):
         why = None
-        if now >= int(item.get('until') or 0):
+        # never longer than the duration from now: a shorter one set, or the clock stepped back
+        item['until'] = min(number(item.get('until')), now + hours * 3600)
+        if now >= item['until']:
             why = 'expired'
-        elif mac in exc['mac'] or any(a in exc['addr'] for a in item.get('addresses') or []):
+        elif mac in exc['mac'] or any(a in exc['addr'] for a in listed(item.get('addresses'))):
             why = 'an exception'
         if why:
-            released[mac] = max(released_last(entries, mac), int(item.get('last') or 0))
+            released[mac] = max(released_last(entries, mac), number(item.get('last')))
             gone.append(mac)
             del isolated[mac]
     skipped = {}
     added = []
+    if exc.get('blind'):
+        # the firewall's own addresses could not be read: it could isolate itself - nothing new this run
+        state['skipped'] = skipped
+        return added, gone
     for entry in sorted(entries.values(), key=lambda e: e['address']):
-        last = int(entry.get('last') or 0)
+        last = number(entry.get('last'))
         if not entry['mac']:
             continue                    # listed by the page from infected.json: not isolated, no MAC
-        if now - last > RECENT:
+        if now - last > RECENT or last - now > AHEAD:
             continue
         reason = why_not(entry, exc)
         if reason:
@@ -313,11 +342,11 @@ def step(state, entries, exc, on, hours, now):
         mac = entry['mac']
         if mac in isolated:
             item = isolated[mac]
-            if entry['address'] not in item['addresses']:
-                item['addresses'] = sorted(set(item['addresses']) | {entry['address']})
-            item['last'] = max(int(item.get('last') or 0), last)
+            if entry['address'] not in listed(item.get('addresses')):
+                item['addresses'] = sorted(set(listed(item.get('addresses'))) | {entry['address']})
+            item['last'] = max(number(item.get('last')), last)
             continue
-        if last <= int(released.get(mac, -1)):
+        if last <= number(released.get(mac, -1)):
             skipped[entry['address']] = {'mac': mac, 'reason': 'undone', 'last': last,
                                          'list': entry.get('list', ''), 'name': entry.get('name', '')}
             continue
@@ -395,6 +424,9 @@ def do_run(now=None):
     added, gone = step(state, entries, exc, on, hours, now)
     summary.update({'isolated': sorted(state['isolated']), 'added': added, 'let_go': gone})
     commit(state, added, gone, summary)
+    if exc.get('blind'):
+        log('isolate: this firewall\'s own addresses could not be read (ifconfig): nothing new isolated')
+        summary['message'] = 'isolate: this firewall\'s own addresses could not be read; nothing new isolated'
     summary.setdefault('message', 'isolate: %d isolated, %d new, %d let go' % (len(state['isolated']), len(added),
                                                                             len(gone)))
     return summary
@@ -408,7 +440,7 @@ def do_list(client, now=None):
         save(STATE, state)
     rows = []
     for mac, item in sorted((state.get('isolated') or {}).items()):
-        rows.append({'mac': mac, 'addresses': item.get('addresses') or [], 'list': item.get('list', ''),
+        rows.append({'mac': mac, 'addresses': listed(item.get('addresses')), 'list': item.get('list', ''),
                      'name': item.get('name', ''), 'since': item.get('since'), 'until': item.get('until')})
     entries = infected()
     others = [{'address': ip, 'mac': '', 'name': e.get('name', ''), 'list': e.get('list', ''),
@@ -428,7 +460,7 @@ def do_undo(mac, client, now=None):
     if item is None:
         save(STATE, state)
         return {'status': 'failed', 'message': 'not isolated: %s' % (mac or 'no MAC address given')}
-    state.setdefault('released', {})[mac] = max(released_last(infected(), mac), int(item.get('last') or 0))
+    state.setdefault('released', {})[mac] = max(released_last(infected(), mac), number(item.get('last')))
     summary = {'status': 'ok', 'mac': mac}
     commit(state, [], [mac], summary)
     if (summary.get('firewall') or {}).get('status') != 'ok':

@@ -180,8 +180,11 @@
         function draw_isolated(data) {
             const $rows = $('#pg-isolated tbody').empty();
             const $others = $('#pg-not-isolated tbody').empty();
-            if (!data || data.error) {
-                $('#pg-isolate-note').text(plain("{{ lang._('Status could not be read.') }}")).show();
+            /* a list that could not be read (another run holds the list, isolate.py stopped) is said so,
+               not drawn as "off" and empty */
+            if (!data || data.error || data.status === 'failed' || typeof data.on !== 'boolean') {
+                $('#pg-isolate-note').text(plain("{{ lang._('Status could not be read.') }}") +
+                    (data && data.message ? ' (' + data.message + ')' : '')).show();
                 return;
             }
             $('#pg-isolate-note').text(plain("{{ lang._('Automatic isolation is off; it is turned on under Settings.') }}"))
@@ -190,7 +193,7 @@
                 $rows.append($('<tr/>')
                     .append($('<td/>').append($('<code/>').text(d.mac)))
                     .append($('<td/>').text((d.addresses || []).join(' ')))
-                    .append($('<td/>').text(d.name || ''))
+                    .append($('<td/>').text(plain(d.name || '')))
                     .append($('<td/>').text(reached(d.list)))
                     .append($('<td/>').text(when(d.since)))
                     .append($('<td/>').text(when(d.until)))
@@ -205,7 +208,7 @@
                 $others.append($('<tr/>')
                     .append($('<td/>').text(d.address || ''))
                     .append($('<td/>').append($('<code/>').text(d.mac || '-')))
-                    .append($('<td/>').text(d.name || ''))
+                    .append($('<td/>').text(plain(d.name || '')))
                     .append($('<td/>').text(reached(d.list)))
                     .append($('<td/>').text(when(d.last)))
                     .append($('<td/>').text(plain(not_why[d.reason] || d.reason || ''))));
