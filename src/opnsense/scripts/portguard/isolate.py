@@ -40,13 +40,14 @@ address from then on. A router that translates addresses shows one IPv4 address 
 
 NEVER ISOLATED - a fixed exception, checked at every run: the firewall's own addresses and MAC addresses
 (ifconfig), its gateways' addresses (config.xml, the routers OPNsense keeps for dynamic gateways in
-/tmp, the default routes), its HA peer (config.xml's hasync), every address logged in to its SSH (utmpx,
-as who(1) prints it) or to its web GUI within the GUI's session timeout (the audit log's logins), every
-address the page was opened from in the last MANAGER_DAYS days - the page passes its client address
-($_SERVER['REMOTE_ADDR']) on each reading - and the MAC addresses ARP and NDP show at any of those. A
-connection is not a login: a device scanning the GUI's or SSH's port opens one. A link-local address
-counts for none of these: fe80::1 is a neighbour of every segment, and an isolated device keeps its
-own, which no table holds.
+/tmp, the default routes), the HA peer's addresses config.xml's hasync gives - pfsync's peer and the
+configuration sync's target, a host name there resolved within RESOLVE_WAIT seconds (ha_peers()), not
+the peer's other addresses - every address logged in to its SSH (utmpx, as who(1) prints it) or to its
+web GUI within the GUI's session timeout (the audit log's logins), every address the page was opened
+from in the last MANAGER_DAYS days - the page passes its client address ($_SERVER['REMOTE_ADDR']) on
+each reading - and the MAC addresses ARP and NDP show at any of those. A connection is not a login: a
+device scanning the GUI's or SSH's port opens one. A link-local address counts for none of these:
+fe80::1 is a neighbour of every segment, and an isolated device keeps its own, which no table holds.
 
 ONCE ISOLATED, a device is let go only when its isolation ends, by Undo, when the option is turned off,
 or when its MAC address turns out to be the firewall's own - never for something it can do itself: an
@@ -81,10 +82,13 @@ import ipaddress
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import urllib.parse
 import xml.etree.ElementTree as ET
 
 CONFIG = '/conf/config.xml'
@@ -112,6 +116,7 @@ DEFAULT_HOURS = 24
 MAX_HOURS = 720
 MANAGER_DAYS = 7            # how long an address the page was opened from stays an exception
 WAIT = 10                   # seconds a run waits for another to end
+RESOLVE_WAIT = 2            # seconds a run waits at most for the HA peer's host names to resolve
 AHEAD = 300                 # a "last" further ahead of this clock than this is no recent connection
 # addresses held for one isolated device at most: its IPv4 address, a stable IPv6 one and a new temporary
 # one a day, in two prefixes, for the longest isolation (MAX_HOURS) fit. One that takes more - a device
@@ -436,16 +441,78 @@ def gui_logins(root, now):
     return out
 
 
-def ha_peers(root):
-    """The HA peer's addresses from config.xml's hasync (pfsync's peer, the configuration's target)."""
-    out = set()
+HOST_NAME = re.compile(r'^(?=.{1,253}$)[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?)*\.?$')
+
+
+def sync_host(word):
+    """The host one word of a hasync setting names: an address as it is - an IPv6 one in brackets or not, a
+    link-local one with its scope - or the host of a URL or of host:port, in lower case
+    (https://[2001:db8::2]:4443/ gives 2001:db8::2, 192.0.2.2:4443 192.0.2.2, https://fw2.example.net/
+    fw2.example.net); '' for nothing."""
+    word = word.strip()
+    if norm_ip(word.strip('[]')):
+        return neighbour_key(word.strip('[]'))
+    try:
+        return urllib.parse.urlsplit(word if '://' in word else '//' + word).hostname or ''
+    except ValueError:
+        return ''
+
+
+def resolve(names, wait=None):
+    """{name: [addresses]} for the host names answered within `wait` seconds (RESOLVE_WAIT where none is
+    given), all of them together: a name not answered in time is not in it, one that does not resolve
+    maps to []. getaddrinfo() takes no time limit of its own - the resolver's are resolv.conf's, five
+    seconds a try - so each name is looked up in a thread of its own, which the run waits for no longer
+    than that and leaves behind when it ends."""
+    found = {}
+
+    def look(name):
+        try:
+            answers = socket.getaddrinfo(name, None, type=socket.SOCK_STREAM)
+        except (OSError, ValueError):
+            answers = []
+        found[name] = sorted({norm_ip(answer[4][0]) for answer in answers} - {''})
+
+    until = time.monotonic() + (RESOLVE_WAIT if wait is None else wait)
+    threads = [threading.Thread(target=look, args=(name,), daemon=True) for name in sorted(names)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(max(0.0, until - time.monotonic()))
+    return {name: found[name] for name in names if name in found}
+
+
+def ha_peers(root, state=None, now=0):
+    """The HA peer's addresses as config.xml's hasync names them - pfsync's peer (an address) and the
+    configuration sync's target (an address, host:port, or a URL: https://[2001:db8::2]:4443/) - not the
+    peer's other addresses, which config.xml does not give. A host name there is resolved (resolve()); one
+    that does not resolve in time counts with the addresses it resolved to the last time (STATE's
+    ha_names), and is said in the system log once, until it resolves again."""
+    out, names = set(), set()
     for path in ('hasync/pfsyncpeerip', 'hasync/synchronizetoip', 'OPNsense/HASync/pfsyncpeerip',
                  'OPNsense/HASync/synchronizetoip'):
-        text = (root.findtext(path) or '').strip()
-        for word in re.split(r'[\s,]+', re.sub(r'^https?://', '', text)):
-            ip = norm_ip(word.split(':')[0] if word.count(':') == 1 else word)
-            if ip:
-                out.add(ip)
+        for word in re.split(r'[\s,;]+', (root.findtext(path) or '').strip()):
+            host = sync_host(word)
+            if norm_ip(host):
+                out.add(neighbour_key(host))
+            elif HOST_NAME.match(host):
+                names.add(host)
+    kept = state.setdefault('ha_names', {}) if state is not None else {}
+    for name in [n for n in kept if n not in names]:
+        del kept[name]
+    found = resolve(names) if names else {}
+    for name in sorted(names):
+        record = kept.get(name) if isinstance(kept.get(name), dict) else {}
+        if found.get(name):
+            kept[name] = {'addresses': found[name], 'at': now}
+        else:
+            if not record.get('failed'):
+                before = [a for a in listed(record.get('addresses')) if norm_ip(a)]
+                log("isolate: the HA peer's host name %s did not resolve within %d seconds: %s" % (
+                    name, RESOLVE_WAIT, 'the addresses it had the last time stay an exception (%s)' % ', '.join(before)
+                    if before else 'no address of it is an exception until it does'))
+            kept[name] = dict(record, failed=True)
+        out.update(norm_ip(a) for a in listed(kept[name].get('addresses')) if norm_ip(a))
     return out
 
 
@@ -472,7 +539,7 @@ def exceptions(root, state, now, table=None):
     # CARP address's virtual one - is the firewall's
     add(mine, 'this firewall')
     add(gateways(root), 'a gateway')
-    add(ha_peers(root), 'the HA peer')
+    add(ha_peers(root, state, now), 'the HA peer')
     # a login, not a connection: a device scanning the GUI's or SSH's port opens one, and the
     # anti-lockout rule lets it. A link-local source counts for nothing here: fe80::1 is a neighbour of
     # every segment, and an isolated device keeps its own, which no table holds.

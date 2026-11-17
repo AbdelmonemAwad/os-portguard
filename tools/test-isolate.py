@@ -766,6 +766,82 @@ fixture('ndp', NDP_BEFORE)
 os.remove(iso.STATE)
 infected({})
 
+# ---------------------------------------------------------------- the HA peer: its sync target an address, a URL or a name
+
+check('the sync target\'s host: an IPv6 address\'s brackets and port taken off, a URL\'s or host:port\'s host',
+      [iso.sync_host(w) for w in ('https://[2001:db8::2]:4443/', 'https://[2001:db8::2]/', '[2001:db8::3]',
+                                  '[2001:db8::4]:4443', '2001:db8::5', '192.0.2.2:4443', 'https://192.0.2.3/',
+                                  'https://FW2.example.net:4443/xmlrpc.php', 'fw3.example.net', 'https://[2001:db8::2/',
+                                  '')],
+      ['2001:db8::2', '2001:db8::2', '2001:db8::3', '2001:db8::4', '2001:db8::5', '192.0.2.2', '192.0.2.3',
+       'fw2.example.net', 'fw3.example.net', '', ''])
+
+
+def hasync(peer='', target=''):
+    """config.xml with automatic isolation on, and the HA settings' pfsync peer and configuration sync target."""
+    config(auto='1', hours='2')
+    with open(CONFIG, encoding='utf-8') as fh:
+        text = fh.read()
+    with open(CONFIG, 'w', encoding='utf-8') as fh:
+        fh.write(text.replace('<opnsense>', '<opnsense><hasync><pfsyncpeerip>%s</pfsyncpeerip><synchronizetoip>%s'
+                              '</synchronizetoip></hasync>' % (peer, target), 1))
+
+
+def said_unresolved(name, since):
+    return len([line for line in logged[since:] if "host name %s did not resolve" % name in line])
+
+
+hasync('192.0.2.95', 'https://[2001:db8::2]:4443/')
+check('the HA peer: pfsync\'s peer, and the configuration sync\'s target given as a URL with an IPv6 address',
+      sorted(iso.ha_peers(iso.read_config(), {}, NOW)), ['192.0.2.95', '2001:db8::2'])
+PEER_MAC = '02:00:00:00:95:02'
+fixture('ndp', NDP_BEFORE + ndp_line('2001:db8::2', PEER_MAC))
+infected({'2001:db8::2': entry(NOW - 30, PEER_MAC)})
+iso.do_run(NOW)
+check('... an entry at that address: not isolated, as the HA peer',
+      (state()['isolated'], state()['skipped'].get('2001:db8::2', {}).get('reason')), ({}, 'the HA peer'))
+fixture('ndp', NDP_BEFORE)
+os.remove(iso.STATE)
+infected({})
+# a host name: resolved within RESOLVE_WAIT seconds; one not answered in time not waited for longer; one that no
+# longer resolves keeps the addresses it had; each said in the system log once
+real_getaddrinfo, saved_resolve_wait = iso.socket.getaddrinfo, iso.RESOLVE_WAIT
+answers = {'fw2.example.net': ['2001:db8::95', '192.0.2.96']}
+
+
+def fake_getaddrinfo(name, port, *args, **kwargs):
+    if name == 'slow.example.net':
+        time.sleep(3)
+    if name not in answers:
+        raise iso.socket.gaierror(iso.socket.EAI_NONAME, 'no such name')
+    return [(iso.socket.AF_INET6 if ':' in a else iso.socket.AF_INET, iso.socket.SOCK_STREAM, 6, '', (a, 0))
+            for a in answers[name]]
+
+
+iso.socket.getaddrinfo, iso.RESOLVE_WAIT = fake_getaddrinfo, 0.5
+try:
+    st = {}
+    hasync('', 'https://fw2.example.net:4443/')
+    check('the target given by a host name: resolved', sorted(iso.ha_peers(iso.read_config(), st, NOW)),
+          ['192.0.2.96', '2001:db8::95'])
+    del answers['fw2.example.net']
+    n = len(logged)
+    found = iso.ha_peers(iso.read_config(), st, NOW + 60)
+    check('a name that resolved before and no longer does: the addresses it had stay, said',
+          (sorted(found), said_unresolved('fw2.example.net', n)), (['192.0.2.96', '2001:db8::95'], 1))
+    iso.ha_peers(iso.read_config(), st, NOW + 120)
+    check('... said once, not every minute', said_unresolved('fw2.example.net', n), 1)
+    hasync('', 'slow.example.net')
+    n = len(logged)
+    started = time.monotonic()
+    found = iso.ha_peers(iso.read_config(), st, NOW + 180)
+    check('a name not answered within the wait: not waited for longer, no address taken, said',
+          (sorted(found), time.monotonic() - started < 2, said_unresolved('slow.example.net', n)), ([], True, 1))
+    check('... and a name no longer set is forgotten', sorted(st.get('ha_names', {})), ['slow.example.net'])
+finally:
+    iso.socket.getaddrinfo, iso.RESOLVE_WAIT = real_getaddrinfo, saved_resolve_wait
+config(auto='1', hours='2')
+
 # ---------------------------------------------------------------- config.xml read once, under OPNsense's lock
 
 # OPNsense's Config::save() rewrites config.xml in place under an exclusive lock: a run waits for it, and
