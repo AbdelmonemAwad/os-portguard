@@ -108,9 +108,12 @@ with open(os.path.join(ROUTERS, 'igb0_nameserver'), 'w', encoding='utf-8') as fh
     fh.write('198.51.100.200\n')
 
 # pfctl stands in for the isolated devices' table: a file holds what it holds, every replace or flush is recorded
-# (WRITES, the addresses as a JSON list a line), and it lists no state; cut.py stands in, counting its runs
+# (WRITES, the addresses as a JSON list a line), and so is every call's command line (CALLS); a replace takes its
+# addresses from the command line and from the file -f names, "-" its stdin, as pfctl does. It lists no state.
+# cut.py stands in, counting its runs
 TABLE = os.path.join(TOP, 'table-portguard_isolated')
 WRITES = os.path.join(TOP, 'writes.jsonl')
+CALLS = os.path.join(TOP, 'pfctl-calls.jsonl')
 CUTS = os.path.join(TOP, 'cuts')
 pf = os.path.join(TOP, 'pfctl-table.py')
 with open(pf, 'w', encoding='utf-8') as fh:
@@ -125,10 +128,15 @@ if args[:2] != ['-t', 'portguard_isolated'] or not os.path.exists(table):
     sys.stderr.write('pfctl: Table does not exist.\\n')
     sys.exit(1)
 op = args[3] if len(args) > 3 else ''
+with open(os.path.join(os.path.dirname(table), 'pfctl-calls.jsonl'), 'a') as f:
+    f.write(json.dumps(args) + '\\n')
 if op == 'show':
     sys.stdout.write(open(table).read())
 elif op in ('replace', 'flush'):
-    addrs = sorted(args[4:]) if op == 'replace' else []
+    addrs = args[4:]
+    if args[4:6] == ['-f', '-']:
+        addrs = args[6:] + sys.stdin.read().split()
+    addrs = sorted(addrs) if op == 'replace' else []
     open(table, 'w').write(''.join('   %s\\n' % a for a in addrs))
     with open(writes, 'a') as f:
         f.write(json.dumps(addrs) + '\\n')
@@ -710,6 +718,51 @@ iso.do_run(NOW + 270)
 check('ARP showing nothing at first: the device os-netreport names, kept - one ARP shows there afterwards is not taken',
       (sorted(state()['isolated']), state()['macs'].get('192.0.2.66', {}).get('mac')), ([PREV_MAC], PREV_MAC))
 fixture('arp', ARP_TEXT)
+os.remove(iso.STATE)
+infected({})
+
+# ---------------------------------------------------------------- many addresses: on pfctl's stdin, 64 a device
+
+
+def calls():
+    try:
+        with open(CALLS, encoding='utf-8') as fh:
+            return [json.loads(line) for line in fh]
+    except OSError:
+        return []
+
+
+def said_too_many(since):
+    return len([line for line in logged[since:] if 'has more than 64 addresses' in line])
+
+
+# a device NDP shows with a hundred IPv6 addresses (one making them up): the table takes 64 of them, the address that
+# reached the list among them; pfctl's command line carries none; the system log says so, once an hour at most
+SPRAY_MAC, SPRAY2_MAC = '02:00:00:00:55:01', '02:00:00:00:55:02'
+fixture('arp', ARP_TEXT + arp_line('192.0.2.55', SPRAY_MAC))
+fixture('ndp', NDP_BEFORE + ''.join(ndp_line('2001:db8:55::%x' % i, SPRAY_MAC) for i in range(1, 101)))
+infected({'192.0.2.55': entry(NOW - 30, SPRAY_MAC)})
+n = len(logged)
+iso.do_run(NOW)
+item = state()['isolated'].get(SPRAY_MAC, {})
+check('a device NDP shows with 100 addresses: 64 held, the one that reached the list among them, and 64 kept',
+      (len(iso.table_now()), '192.0.2.55' in iso.table_now(), len(item.get('held', [])), len(item.get('seen', {}))),
+      (64, True, 64, 64))
+check('... pfctl given them on its stdin, none on its command line',
+      [c for c in calls() if 'replace' in c][-1], ['-t', 'portguard_isolated', '-T', 'replace', '-f', '-'])
+check('... said in the system log', said_too_many(n), 1)
+iso.do_run(NOW + 60)
+check('... not again every minute', said_too_many(n), 1)
+iso.do_run(NOW + 3700)
+check('... but again an hour later', said_too_many(n), 2)
+# a device that reached the list from 70 addresses: 64 of them kept as the ones that reached it, and held
+infected(dict(('2001:db8:56::%x' % i, entry(NOW + 3700, SPRAY2_MAC)) for i in range(1, 71)))
+iso.do_run(NOW + 3710)
+item = state()['isolated'].get(SPRAY2_MAC, {})
+check('a device that reached the list from 70 addresses: 64 of them kept, and held',
+      (len(item.get('addresses', [])), len(item.get('held', []))), (64, 64))
+fixture('arp', ARP_TEXT)
+fixture('ndp', NDP_BEFORE)
 os.remove(iso.STATE)
 infected({})
 

@@ -24,13 +24,14 @@ portguard_isolated: an external alias (OPNsense's "External (advanced)"), which 
 page's Apply while automatic isolation is on and plugins.inc.d/portguard.inc's rules block both ways.
 Its table is kept here, with pfctl, at every run (held()): for each isolated MAC address, the addresses
 that reached the list, the ones ARP and NDP show for it then, and every one they showed during its
-isolation - a device quiet for a while loses its ARP entry, and is still held when it speaks again - but
-never a link-local address (a table has no scope), an exception's, or one ARP or NDP shows under another
-MAC address then. An address a device takes is held from the next run, within a minute; cut.py cuts the
-open connections of the addresses the table gains. So an isolation writes nothing into config.xml (no
-backup pushed out, nothing saved over a change made in the GUI meanwhile) and reloads no filter, and a
-firewall that takes over in HA starts with an empty table. An entry without a MAC address that ARP or
-NDP does not know either is not isolated, and the page lists it as such.
+isolation - a device quiet for a while loses its ARP entry, and is still held when it speaks again -
+MAX_HELD of them at most a device, put on pfctl's stdin; but never a link-local address (a table has no
+scope), an exception's, or one ARP or NDP shows under another MAC address then. An address a device
+takes is held from the next run, within a minute; cut.py cuts the open connections of the addresses
+the table gains. So an isolation writes nothing into config.xml (no backup pushed out, nothing saved
+over a change made in the GUI meanwhile) and reloads no filter, and a firewall that takes over in HA
+starts with an empty table. An entry without a MAC address that ARP or NDP does not know either is not
+isolated, and the page lists it as such.
 
 A SHARED MAC ADDRESS - one ARP shows with more than one IPv4 address, as a repeater that puts its own MAC
 address on its clients' traffic is shown - is isolated by the addresses that reached the list only; one
@@ -112,6 +113,12 @@ MAX_HOURS = 720
 MANAGER_DAYS = 7            # how long an address the page was opened from stays an exception
 WAIT = 10                   # seconds a run waits for another to end
 AHEAD = 300                 # a "last" further ahead of this clock than this is no recent connection
+# addresses held for one isolated device at most: its IPv4 address, a stable IPv6 one and a new temporary
+# one a day, in two prefixes, for the longest isolation (MAX_HOURS) fit. One that takes more - a device
+# making up IPv6 addresses, each of which NDP shows - would grow STATE and the table without end; it is
+# held at the addresses that reached the list, those ARP and NDP show now and its newest, and the rest are
+# said in the system log (too_many())
+MAX_HELD = 64
 MAC = re.compile(r'^[0-9a-f]{2}(:[0-9a-f]{2}){5}$')
 
 
@@ -584,8 +591,21 @@ def follow(item, mac, table, exc, now):
         for ip in now_at:
             if ip not in exc['addr']:
                 seen[ip] = now
+    if len(seen) > MAX_HELD:
+        # its newest kept: no older one could be held (held(), blocked_addresses())
+        seen = dict(sorted(seen.items(), key=lambda kv: (-number(kv[1]), str(kv[0])))[:MAX_HELD])
+        too_many(item, mac, now)
     item['seen'] = seen
     item['shared'] = bool(item.get('shared'))
+
+
+def too_many(item, mac, now):
+    """An isolated device with more addresses than MAX_HELD, said in the system log - the first time in its
+    isolation, then once an hour at most rather than every minute."""
+    if now - number(item.get('too_many')) >= 3600:
+        item['too_many'] = now
+        log('isolate: %s has more than %d addresses: those held are the ones that reached the list, then those '
+            'ARP and NDP show now, then its newest; the others are not held' % (mac, MAX_HELD))
 
 
 def held(item, mac, table, exc):
@@ -676,7 +696,10 @@ def step(state, entries, exc, on, hours, now):
         if mac in isolated:
             item = isolated[mac]
             if entry['address'] not in listed(item.get('addresses')):
-                item['addresses'] = sorted(set(listed(item.get('addresses'))) | {entry['address']})
+                if len(listed(item.get('addresses'))) < MAX_HELD:
+                    item['addresses'] = sorted(set(listed(item.get('addresses'))) | {entry['address']})
+                else:
+                    too_many(item, mac, now)
             item['last'] = max(number(item.get('last')), last)
             continue
         let_go_last, let_go_until = held_back(released.get(mac), now)
@@ -740,16 +763,19 @@ def table_now():
     return sorted({norm_ip(line) for line in r.stdout.splitlines() if norm_ip(line)})
 
 
-def blocked_addresses(state, exc):
-    """What the table is to hold: every isolated device's held() addresses - each device's kept in STATE
-    (its 'held'), for the page to say whether pf holds them."""
+def blocked_addresses(state, exc, now):
+    """What the table is to hold: every isolated device's held() addresses, MAX_HELD of them at most - each
+    device's kept in STATE (its 'held'), for the page to say whether pf holds them."""
     table = exc.get('table')
     if table is None:
         table = neighbours()
     out = set()
     for mac, item in (state.get('isolated') or {}).items():
         if isinstance(item, dict):
-            item['held'] = held(item, mac, table, exc)
+            ranked = held(item, mac, table, exc)
+            if len(ranked) > MAX_HELD:
+                too_many(item, mac, now)
+            item['held'] = ranked[:MAX_HELD]
             out.update(item['held'])
     return sorted(out)
 
@@ -766,9 +792,18 @@ def fill_table(want):
         return {'status': 'failed', 'errors': ['no table %s: Apply on the Settings tab makes it' % ALIAS]}
     if have == want:
         return {'status': 'ok', 'held': len(have)}
-    args = [PFCTL, '-t', ALIAS, '-T', 'replace'] + want if want else [PFCTL, '-t', ALIAS, '-T', 'flush']
+    # the addresses on pfctl's stdin, not its command line: past the length a command line may have, the
+    # table was not written at all - an isolated device that NDP shows with ever more addresses kept new
+    # isolations and Undo out of it. "-f -" is read from stdin: pfctl_table()'s replace hands its file to
+    # load_addr(), whose pfr_buf_load() takes "-" for stdin (FreeBSD's sbin/pfctl, pfctl_table.c and
+    # pfctl_radix.c)
+    if want:
+        args = [PFCTL, '-t', ALIAS, '-T', 'replace', '-f', '-']
+    else:
+        args = [PFCTL, '-t', ALIAS, '-T', 'flush']
     try:
-        r = subprocess.run(args, capture_output=True, text=True, timeout=60)
+        r = subprocess.run(args, input=''.join('%s\n' % ip for ip in want), capture_output=True, text=True,
+                           timeout=60)
     except (OSError, subprocess.SubprocessError) as e:
         return {'status': 'failed', 'errors': [str(e)]}
     if r.returncode != 0:
@@ -784,12 +819,12 @@ def fill_table(want):
     return answer
 
 
-def commit(state, added, gone, summary, exc, alias):
+def commit(state, added, gone, summary, exc, alias, now):
     """STATE written, and pf's table made to hold the addresses the isolated devices have now - at every
     run, as addresses move (a lease renewed), and so that a STATE that was lost empties it. exc is this
     run's exceptions, whose addresses the table never holds, and alias the alias's state (alias_state()):
     Undo is given both as a run is."""
-    want = blocked_addresses(state, exc) if state.get('isolated') else []
+    want = blocked_addresses(state, exc, now) if state.get('isolated') else []
     if alias == 'ready' or (not want and table_now()):
         # nothing to hold and the table still holding addresses (isolation turned off, its alias gone or
         # switched off): emptied all the same - nobody stays isolated with nothing on the page
@@ -834,7 +869,7 @@ def do_run(now=None):
     exc = exceptions(root, state, now, table) if on else {'addr': {}, 'mac': {}}
     added, gone = step(state, entries, exc, on, hours, now)
     summary.update({'isolated': sorted(state['isolated']), 'added': added, 'let_go': gone})
-    commit(state, added, gone, summary, exc, alias_state(root))
+    commit(state, added, gone, summary, exc, alias_state(root), now)
     if exc.get('blind'):
         log('isolate: this firewall\'s own addresses could not be read (ifconfig): nothing new isolated')
         summary['message'] = 'isolate: this firewall\'s own addresses could not be read; nothing new isolated'
@@ -897,7 +932,7 @@ def do_undo(mac, client, now=None):
     summary = {'status': 'ok', 'mac': mac}
     # the table written as a run writes it: never an exception's address - another isolated device may
     # answer ARP for a gateway's by now - and only while the alias is ready
-    commit(state, [], [mac], summary, exceptions(root, state, now, table), alias_state(root))
+    commit(state, [], [mac], summary, exceptions(root, state, now, table), alias_state(root), now)
     if (summary.get('firewall') or {}).get('status') != 'ok':
         summary['status'] = 'failed'
     return summary
