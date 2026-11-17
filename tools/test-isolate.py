@@ -220,8 +220,8 @@ item = state()['isolated'][BAD_MAC]
 check('isolated: both its addresses, its list, its name', (item['addresses'], item['list'], item['name']),
       (['192.0.2.66', '2001:db8::66'], 'feodo', 'camera'))
 check('isolated: until now + the duration', (item['since'], item['until']), (NOW, NOW + 2 * 3600))
-check('the table made to hold the address the isolated MAC address has now (NDP), not the others\'',
-      writes(), [['2001:db8::66']])
+check('the table made to hold the isolated MAC address\'s addresses - those that reached the list, the one NDP '
+      'shows now - not the others\'', writes(), [['192.0.2.66', '2001:db8::66']])
 check('... and the cut run for what it gained', open(CUTS).read().split(), ['run'])
 check('an entry an hour old: not isolated', BAD2_MAC in state()['isolated'], False)
 skipped = state()['skipped']
@@ -460,12 +460,14 @@ try:
         fh.write(text.replace('<gateway>203.0.113.1</gateway>', '<gateway>203.0.113.9</gateway>'))
     iso.do_run(NOW + 110)
     skipped = state()['skipped']
-    check('not isolated: a MAC address two IPv4 addresses share; one whose other address is the gateway; a connection '
-          'to the GUI; the HA peer - each with why; a connection to another port is isolated',
+    check('not isolated: one whose other address is the gateway; a connection to the GUI; the HA peer - each with '
+          'why; a connection to another port is isolated, and so is a MAC address two IPv4 addresses share',
           ({a: skipped[a]['reason'] for a in skipped}, sorted(state()['isolated'])),
-          ({'192.0.2.91': 'a MAC address several devices share', '192.0.2.93': 'a gateway',
-            '192.0.2.80': 'a connection to the web GUI or SSH of this firewall', '192.0.2.95': 'the HA peer'},
-           ['02:00:00:00:77:04']))
+          ({'192.0.2.93': 'a gateway', '192.0.2.80': 'a connection to the web GUI or SSH of this firewall',
+            '192.0.2.95': 'the HA peer'}, [SHARED_MAC, '02:00:00:00:77:04']))
+    item = state()['isolated'].get(SHARED_MAC, {})
+    check('... the shared one by the address that reached the list only, not its other client\'s',
+          (item.get('shared'), item.get('held')), (True, ['192.0.2.91']))
 finally:
     iso.PFCTL = saved_pfctl
     fixture('arp', ARP_BEFORE)
@@ -474,10 +476,127 @@ with open(os.path.join(ROOT, 'src', 'opnsense', 'mvc', 'app', 'views', 'OPNsense
           encoding='utf-8') as fh:
     volt = fh.read()
 check('the page words each new reason', all("'%s': \"{{ lang._(" % r in volt for r in (
-    'the HA peer', 'a connection to the web GUI or SSH of this firewall', 'a MAC address several devices share')), True)
+    'the HA peer', 'a connection to the web GUI or SSH of this firewall')), True)
+check('the page: a row shows what is held for it, says when no address of it is seen now and when it is shared',
+      ["((d.holding || []).length ? d.holding : (d.addresses || [])).join(' ')" in volt,
+       "if (!(d.addresses_now || []).length) {" in volt, 'if (d.shared) {' in volt], [True, True, True])
 os.remove(iso.STATE)
 infected({})
 config(auto='1', hours='2')
+
+# ---------------------------------------------------------------- once isolated: held whole, let go only at its end
+
+
+def arp_line(ip, mac, extra='expires in 900 seconds'):
+    return '? (%s) at %s on igb0 %s [ethernet]\n' % (ip, mac, extra)
+
+
+def ndp_line(ip, mac):
+    return '%-36s %s  igb0 23h59m58s S R\n' % (ip, mac)
+
+
+ONE_MAC, TWO_MAC, NEW_HOLDER_MAC, VIP_MAC = ('02:00:00:00:88:01', '02:00:00:00:88:02', '02:00:00:00:88:03',
+                                             '02:00:00:00:99:0a')
+# a device with an IPv4 address and IPv6 ones is one device: every address held but its link-local one, here and
+# on the page
+fixture('arp', ARP_TEXT + arp_line('192.0.2.88', ONE_MAC))
+fixture('ndp', NDP_BEFORE + ndp_line('2001:db8::88', ONE_MAC) + ndp_line('fe80::88%igb0', ONE_MAC))
+infected({'192.0.2.88': entry(NOW + 100, ONE_MAC)})
+iso.do_run(NOW + 110)
+item = state()['isolated'].get(ONE_MAC, {})
+check('an IPv4 address and an IPv6 one: one device, not shared - both held, not its link-local one',
+      (item.get('shared'), item.get('held'), writes()[-1]), (False, ['192.0.2.88', '2001:db8::88'], ['192.0.2.88', '2001:db8::88']))
+row = iso.do_list('', NOW + 115)['isolated'][0]
+check('the page: what is held for it, and its addresses now - no link-local one', (row['holding'], row['addresses_now'],
+      row['held'], row['shared']), (['192.0.2.88', '2001:db8::88'], ['192.0.2.88', '2001:db8::88'], True, False))
+# quiet for 20 minutes, ARP and NDP forget it: what it had is held all the same, and the page says no address of it
+# is seen now rather than that it is held at nothing
+fixture('arp', ARP_TEXT)
+fixture('ndp', NDP_BEFORE)
+iso.do_run(NOW + 1400)
+row = iso.do_list('', NOW + 1410)['isolated'][0]
+check('ARP and NDP forget it: its addresses still held; the page says none is seen now',
+      (iso.table_now(), row['addresses_now'], row['held']), (['192.0.2.88', '2001:db8::88'], [], True))
+# it speaks again from a new IPv6 address: held from the next run, the others kept
+fixture('arp', ARP_TEXT + arp_line('192.0.2.88', ONE_MAC))
+fixture('ndp', NDP_BEFORE + ndp_line('2001:db8::8888', ONE_MAC))
+iso.do_run(NOW + 1420)
+check('a new address it takes: held from the next run, the old ones kept', iso.table_now(),
+      ['192.0.2.88', '2001:db8::88', '2001:db8::8888'])
+# it answers ARP for the address the page is opened from and for the gateway's: not let go, and neither address
+# goes into the table
+iso.do_list('192.0.2.50', NOW + 1430)
+fixture('arp', ARP_TEXT.replace('(192.0.2.50) at %s' % ADMIN_MAC, '(192.0.2.50) at %s' % ONE_MAC)
+        .replace('(203.0.113.1) at %s' % GW_MAC, '(203.0.113.1) at %s' % ONE_MAC) + arp_line('192.0.2.88', ONE_MAC))
+answer = iso.do_run(NOW + 1440)
+check('it answers ARP for the page client\'s and the gateway\'s addresses: not let go, neither address in the table, '
+      'and not taken for a MAC address several devices share',
+      (answer.get('let_go'), ONE_MAC in state()['isolated'], iso.table_now(), state()['isolated'].get(ONE_MAC, {}).get('shared')),
+      ([], True, ['192.0.2.88', '2001:db8::88', '2001:db8::8888'], False))
+st = state()
+check('a link-local page client: not kept - it counts for nothing', (iso.remember_client(st, 'fe80::66', NOW + 1441),
+      'fe80::66' in st.get('managers', {})), (False, False))
+# it takes a second IPv4 address: not let go - shared from now on, what it had alone held, the new address not
+fixture('arp', ARP_TEXT + arp_line('192.0.2.88', ONE_MAC) + arp_line('192.0.2.89', ONE_MAC))
+n = len(logged)
+answer = iso.do_run(NOW + 1450)
+item = state()['isolated'].get(ONE_MAC, {})
+check('a second IPv4 address it takes: not let go - shared from now, what it had alone held, the new one not',
+      (answer.get('let_go'), item.get('shared'), iso.table_now()), ([], True, ['192.0.2.88', '2001:db8::88', '2001:db8::8888']))
+check('... said in the system log', any('shows more than one IPv4 address' in line for line in logged[n:]), True)
+# shared for the rest of its isolation: the second address gone again, a new one it shows is still not taken
+fixture('arp', ARP_TEXT + arp_line('192.0.2.88', ONE_MAC))
+fixture('ndp', NDP_BEFORE + ndp_line('2001:db8::8889', ONE_MAC))
+iso.do_run(NOW + 1455)
+check('shared for the rest of its isolation: a new address after the second one went is not taken either',
+      (state()['isolated'].get(ONE_MAC, {}).get('shared'), iso.table_now()), (True, ['192.0.2.88', '2001:db8::88', '2001:db8::8888']))
+# its MAC address turns out to be the firewall's own (ifconfig lists it): let go
+with open(os.path.join(FIX, 'ifconfig'), encoding='utf-8') as fh:
+    IFCONFIG_TEXT = fh.read()
+fixture('ifconfig', IFCONFIG_TEXT + 'igb2: flags=8843<UP> mtu 1500\n\tether %s\n' % ONE_MAC)
+answer = iso.do_run(NOW + 1460)
+fixture('ifconfig', IFCONFIG_TEXT)
+check('its MAC address the firewall\'s own: let go', (answer.get('let_go'), ONE_MAC in state()['isolated']), ([ONE_MAC], False))
+# an address held for it that another device has now (ARP shows it there): no longer held
+os.remove(iso.STATE)
+fixture('arp', ARP_TEXT + arp_line('192.0.2.86', TWO_MAC))
+fixture('ndp', NDP_BEFORE)
+infected({'192.0.2.86': entry(NOW + 900, TWO_MAC)})
+iso.do_run(NOW + 910)
+before = iso.table_now()
+fixture('arp', ARP_TEXT + arp_line('192.0.2.86', NEW_HOLDER_MAC))
+iso.do_run(NOW + 1520)
+row = iso.do_list('', NOW + 1525)['isolated'][0]
+check('an address held for it that ARP shows under another MAC address now: let go of, said on the page',
+      (before, iso.table_now(), row['holding'], row['held']), (['192.0.2.86'], [], [], False))
+# the MAC address ARP shows at one of the firewall's own addresses (a CARP address's virtual one, which ifconfig
+# does not list) is the firewall's: not isolated
+os.remove(iso.STATE)
+fixture('arp', ARP_TEXT + arp_line('192.0.2.1', VIP_MAC, 'permanent'))
+infected({'192.0.2.60': entry(NOW + 1600, VIP_MAC)})
+iso.do_run(NOW + 1610)
+check('the MAC address at one of the firewall\'s own addresses: the firewall\'s, not isolated',
+      (VIP_MAC in state()['isolated'], state()['skipped'].get('192.0.2.60', {}).get('reason')), (False, 'this firewall'))
+# a link-local address names no MAC address without its scope: fe80::1 is a neighbour of every segment
+check('a link-local exception: its MAC address only under its own scope',
+      [iso.macs_for({'fe80::1%igb0': GW_MAC, 'fe80::1%igb1': PC_MAC}, k) for k in ('fe80::1%igb1', 'fe80::1', '2001:db8::5')],
+      [[PC_MAC], [], []])
+fixture('route-inet6', '   route to: default\n    gateway: fe80::1%igb1\n  interface: igb1\n')
+with open(CONFIG, encoding='utf-8') as fh:
+    whole = fh.read()
+with open(CONFIG, 'w', encoding='utf-8') as fh:
+    fh.write(whole.replace('</Gateways>', '<gateway_item><name>LAN6_LL</name><interface>lan</interface><gateway>fe80::2'
+                           '</gateway></gateway_item></Gateways>').replace('<opnsense>', '<opnsense><interfaces><lan>'
+                           '<if>igb0</if></lan></interfaces>', 1))
+check('gateways: a link-local one with its scope - from the default route, and from its interface in config.xml',
+      sorted(k for k in iso.gateways(iso.read_config()) if k.startswith('fe80')), ['fe80::1%igb1', 'fe80::2%igb0'])
+with open(CONFIG, 'w', encoding='utf-8') as fh:
+    fh.write(whole)
+fixture('route-inet6', 'route: route has not been found\n')
+fixture('arp', ARP_TEXT)
+fixture('ndp', NDP_BEFORE)
+os.remove(iso.STATE)
+infected({})
 
 # ---------------------------------------------------------------- config.xml read once, under OPNsense's lock
 

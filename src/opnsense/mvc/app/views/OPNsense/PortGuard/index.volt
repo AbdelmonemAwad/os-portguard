@@ -168,7 +168,6 @@
             'the address this page is opened from': "{{ lang._('not isolated: an address this page was opened from') }}",
             'the HA peer': "{{ lang._('not isolated: the HA peer') }}",
             'a connection to the web GUI or SSH of this firewall': "{{ lang._('not isolated: a connection to the web GUI or SSH of this firewall') }}",
-            'a MAC address several devices share': "{{ lang._('not isolated: a MAC address several devices share (a repeater, a router)') }}",
             'undone': "{{ lang._('not isolated again: undone, until its isolation would have ended and a newer connection') }}"
         };
 
@@ -193,8 +192,18 @@
             $('#pg-isolate-note').text(plain("{{ lang._('Automatic isolation is off; it is turned on under Settings.') }}"))
                 .toggle(!data.on);
             (data.isolated || []).forEach(function (d) {
-                /* the firewall's table not holding what the device has now: said, not hidden */
-                const $where = $('<td/>').text((d.addresses || []).join(' '));
+                /* the addresses held for it (those that reached the list where none is); a device ARP and
+                   NDP show no address of now, one whose MAC address others share, and one the firewall's
+                   table does not hold are said, not drawn as held */
+                const $where = $('<td/>').text(((d.holding || []).length ? d.holding : (d.addresses || [])).join(' '));
+                if (!(d.addresses_now || []).length) {
+                    $where.append($('<div class="text-muted"/>')
+                        .text(plain("{{ lang._('No address of it is seen now.') }}")));
+                }
+                if (d.shared) {
+                    $where.append($('<div class="text-muted"/>')
+                        .text(plain("{{ lang._('Its MAC address shows more than one IPv4 address: only the addresses that reached the list, and those it had alone, are held.') }}")));
+                }
                 if (d.held === false) {
                     $where.append($('<div class="text-warning"/>')
                         .text(plain("{{ lang._('The firewall does not hold its addresses now.') }}")));

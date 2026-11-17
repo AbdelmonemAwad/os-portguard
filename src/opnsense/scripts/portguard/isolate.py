@@ -21,22 +21,34 @@ off by default) is on: every entry whose MAC address is known and whose "last" i
 RECENT seconds puts that MAC address on the isolation list, until now + general.isolate_hours (24 by
 default). The firewall blocks it through an alias of its own, portguard_isolated: an external alias
 (OPNsense's "External (advanced)"), which apply.php makes at the page's Apply while automatic isolation
-is on and plugins.inc.d/portguard.inc's rules block both ways. Its table is kept here, with pfctl: at
-every run it is made to hold the addresses the isolated MAC addresses have in the ARP and NDP tables
-then (as OPNsense resolves a MAC alias; a link-local address has no place in a table), and cut.py cuts
-the open connections of the addresses it gains. So an isolation writes nothing into config.xml (no
-backup pushed out, nothing saved over a change made in the GUI meanwhile) and reloads no filter, and a
-firewall that takes over in HA starts with an empty table. An entry without a MAC address that ARP or
-NDP does not know either is not isolated, and the page lists it as such.
+is on and plugins.inc.d/portguard.inc's rules block both ways. Its table is kept here, with pfctl, at
+every run (held()): for each isolated MAC address, the addresses that reached the list, the ones ARP and
+NDP show for it then, and every one they showed during its isolation - a device quiet for a while loses
+its ARP entry, and is still held when it speaks again - but never a link-local address (a table has no
+scope), an exception's, or one ARP or NDP shows under another MAC address then. An address a device
+takes is held from the next run, within a minute; cut.py cuts the open connections of the addresses the
+table gains. So an isolation writes nothing into config.xml (no backup pushed out, nothing saved over a
+change made in the GUI meanwhile) and reloads no filter, and a firewall that takes over in HA starts
+with an empty table. An entry without a MAC address that ARP or NDP does not know either is not
+isolated, and the page lists it as such.
 
-NEVER ISOLATED - a fixed exception, checked at every run, for the isolated ones too: the firewall's own
-addresses and MAC addresses (ifconfig), its gateways' addresses (config.xml, the routers OPNsense keeps
-for dynamic gateways in /tmp, the default routes) and their MAC addresses (ARP and NDP), its HA peer
-(config.xml's hasync), every address with a connection open to its web GUI or SSH port (pf's states),
-and every address the page was opened from in the last MANAGER_DAYS days, with its MAC address - the
-page passes its client address ($_SERVER['REMOTE_ADDR']) on each reading. And never a MAC address the
-ARP table gives more than one IPv4 address (a repeater, a router: every device behind it would be cut
-off), nor one any of whose addresses is an exception.
+A SHARED MAC ADDRESS - one ARP shows with more than one IPv4 address, as a repeater that puts its own MAC
+address on its clients' traffic is shown - is isolated by the addresses that reached the list only; one
+that shows a second IPv4 address during its isolation keeps what it had alone as well, and takes no new
+address from then on. A router that translates addresses shows one IPv4 address and is isolated whole.
+
+NEVER ISOLATED - a fixed exception, checked at every run: the firewall's own addresses and MAC addresses
+(ifconfig), its gateways' addresses (config.xml, the routers OPNsense keeps for dynamic gateways in
+/tmp, the default routes), its HA peer (config.xml's hasync), every address with a connection open to
+its web GUI or SSH port (pf's states), every address the page was opened from in the last MANAGER_DAYS
+days - the page passes its client address ($_SERVER['REMOTE_ADDR']) on each reading - and the MAC
+addresses ARP and NDP show at any of those. A link-local address counts for none of these: fe80::1 is a
+neighbour of every segment, and an isolated device keeps its own, which no table holds.
+
+ONCE ISOLATED, a device is let go only when its isolation ends, by Undo, when the option is turned off,
+or when its MAC address turns out to be the firewall's own - never for something it can do itself: an
+address it takes (two IPv4 addresses make a MAC address shared), an exception's address it answers ARP
+for, a connection it opens. An exception's address it shows is kept out of the table instead.
 
 UNDO lets a device go at once, and it is not isolated again before its isolation would have ended (a
 device taken for infected by mistake keeps reaching the list, and would be isolated again the next
@@ -223,12 +235,18 @@ def own():
 
 def gateways(root):
     """The gateways' addresses: config.xml's (the Gateways model, mounted at //OPNsense/Gateways), the
-    routers OPNsense keeps for dynamic ones, and the default routes."""
+    routers OPNsense keeps for dynamic ones, and the default routes - a link-local one with its scope
+    (neighbour_key()): the default route says it (fe80::1%igb1), and config.xml's gateway is on its
+    interface's device."""
     out = set()
     for item in root.findall('OPNsense/Gateways/gateway_item') + root.findall('gateways/gateway_item'):
-        ip = norm_ip(item.findtext('gateway'))
-        if ip:
-            out.add(ip)
+        key = neighbour_key(item.findtext('gateway'))
+        name = (item.findtext('interface') or '').strip()
+        if key and link_local(key) and '%' not in key and re.match(r'^\w+$', name):
+            device = (root.findtext('interfaces/%s/if' % name) or '').strip()
+            key += '%' + device if device else ''
+        if key:
+            out.add(key)
     try:
         names = [n for n in os.listdir(ROUTERS) if n.endswith('_router') or n.endswith('_routerv6')]
     except OSError:
@@ -236,16 +254,18 @@ def gateways(root):
     for name in names:
         try:
             with open(os.path.join(ROUTERS, name), encoding='utf-8', errors='replace') as fh:
-                ip = norm_ip(fh.read().strip())
+                key = neighbour_key(fh.read().strip())
         except OSError:
             continue
-        if ip:
-            out.add(ip)
+        if key and link_local(key) and '%' not in key:
+            key += '%' + name.rsplit('_router', 1)[0]       # the file is named for its device: igb2_routerv6
+        if key:
+            out.add(key)
     for family in ('-inet', '-inet6'):
         found = re.search(r'gateway:\s*(\S+)', run_cmd([ROUTE, '-n', 'get', family, 'default']))
-        ip = norm_ip(found.group(1)) if found else ''
-        if ip:
-            out.add(ip)
+        key = neighbour_key(found.group(1)) if found else ''
+        if key:
+            out.add(key)
     return out
 
 
@@ -259,9 +279,30 @@ def neighbour_key(addr):
     return ip
 
 
+def link_local(ip):
+    """Whether an address (as norm_ip() gives it) is link-local: fe80::/10 or 169.254/16."""
+    try:
+        return ipaddress.ip_address(ip).is_link_local
+    except ValueError:
+        return False
+
+
 def macs_at(table, ip):
     """The MAC addresses neighbours() holds for an address, under any scope."""
     return sorted({mac for key, mac in table.items() if key.split('%')[0] == ip})
+
+
+def macs_for(table, key):
+    """The MAC addresses ARP and NDP show at an exception's address: a link-local one only under its own
+    scope - fe80::1 on igb0 and on igb1 are two devices - and none for one without a scope, which could
+    be any segment's."""
+    ip = norm_ip(key)
+    if not ip:
+        return []
+    if link_local(ip):
+        key = neighbour_key(key)
+        return [table[key]] if '%' in key and key in table else []
+    return macs_at(table, ip)
 
 
 def addresses_of(table, mac):
@@ -326,42 +367,50 @@ def exceptions(root, state, now, table=None):
     table = neighbours() if table is None else table
     mine, my_macs = own()
     blind = not mine or not my_macs
-    for ip in mine:
-        addr[ip] = 'this firewall'
+
+    def add(keys, why):
+        # each address, and the MAC addresses ARP and NDP show at it now (macs_for(): a link-local one
+        # only under its scope); the first reason found stays an address's or a MAC address's
+        for key in keys:
+            if norm_ip(key):
+                addr.setdefault(norm_ip(key), why)
+            for m in macs_for(table, key):
+                mac.setdefault(m, why)
+
     for m in my_macs:
         mac[m] = 'this firewall'
-    for ip in gateways(root):
-        addr.setdefault(ip, 'a gateway')
-        for m in macs_at(table, ip):
-            mac.setdefault(m, 'a gateway')
-    for ip in ha_peers(root):
-        addr.setdefault(ip, 'the HA peer')
-        for m in macs_at(table, ip):
-            mac.setdefault(m, 'the HA peer')
-    for ip in managing(root, mine):
-        addr.setdefault(ip, 'a connection to the web GUI or SSH of this firewall')
-        for m in macs_at(table, ip):
-            mac.setdefault(m, 'a connection to the web GUI or SSH of this firewall')
+    # the firewall's own addresses too: the MAC address ARP shows at one that ifconfig does not list - a
+    # CARP address's virtual one - is the firewall's
+    add(mine, 'this firewall')
+    add(gateways(root), 'a gateway')
+    add(ha_peers(root), 'the HA peer')
+    # a link-local source counts for nothing here: fe80::1 is a neighbour of every segment, and an
+    # isolated device keeps its own, which no table holds
+    add([ip for ip in managing(root, mine) if not link_local(ip)],
+        'a connection to the web GUI or SSH of this firewall')
     for ip, seen in (state.get('managers') or {}).items():
-        if not isinstance(seen, dict) or now - number(seen.get('at')) > MANAGER_DAYS * 86400:
+        if not isinstance(seen, dict) or now - number(seen.get('at')) > MANAGER_DAYS * 86400 or link_local(ip):
             continue
-        addr.setdefault(ip, 'the address this page is opened from')
-        for m in filter(None, [norm_mac(seen.get('mac'))] + macs_at(table, ip)):
-            mac.setdefault(m, 'the address this page is opened from')
-    return {'addr': addr, 'mac': mac, 'blind': blind, 'table': table}
+        add([ip], 'the address this page is opened from')
+        if norm_mac(seen.get('mac')):
+            mac.setdefault(norm_mac(seen.get('mac')), 'the address this page is opened from')
+    return {'addr': addr, 'mac': mac, 'own_macs': set(my_macs), 'blind': blind, 'table': table}
 
 
-def remember_client(state, client, now):
-    """The address the page is opened from, with its MAC address now, kept as an exception."""
-    ip = norm_ip(client)
-    if not ip:
-        return False
+def remember_client(state, client, now, table=None):
+    """The address the page is opened from, with its MAC address now, kept as an exception - not a
+    link-local one, which counts for nothing (exceptions()) - and the ones older than MANAGER_DAYS
+    forgotten. Whether STATE changed."""
     managers = state.setdefault('managers', {})
-    managers[ip] = {'at': now, 'mac': (macs_at(neighbours(), ip) or [''])[0] or
-                    ((managers.get(ip) if isinstance(managers.get(ip), dict) else {}).get('mac', ''))}
-    for old in [k for k, v in managers.items()
-                if not isinstance(v, dict) or now - number(v.get('at')) > MANAGER_DAYS * 86400]:
-        del managers[old]
+    old = [k for k, v in managers.items() if not isinstance(v, dict) or now - number(v.get('at')) > MANAGER_DAYS * 86400]
+    for k in old:
+        del managers[k]
+    ip = norm_ip(client)
+    if not ip or link_local(ip):
+        return bool(old)
+    kept = managers.get(ip) if isinstance(managers.get(ip), dict) else {}
+    managers[ip] = {'at': now, 'mac': (macs_at(neighbours() if table is None else table, ip) or [''])[0] or
+                    norm_mac(kept.get('mac'))}
     return True
 
 
@@ -398,20 +447,69 @@ def infected(state):
 
 
 def why_not(entry, exc):
-    """Why this entry's device is not isolated, or None: its address or MAC address an exception, one of
-    the addresses its MAC address has an exception, or more than one IPv4 address behind its MAC
-    address (a repeater, a router - isolating it would cut off every device behind it)."""
+    """Why this entry's device is not isolated, or None: its address or its MAC address an exception's.
+    A MAC address ARP and NDP show at an exception's address is one already (exceptions()); a MAC address
+    several devices share is isolated by its own addresses (shared())."""
     if entry['address'] in exc['addr']:
         return exc['addr'][entry['address']]
     if entry['mac'] in exc['mac']:
         return exc['mac'][entry['mac']]
-    behind = addresses_of(exc.get('table') or {}, entry['mac'])
-    for ip in behind:
-        if ip in exc['addr']:
-            return exc['addr'][ip]
-    if len([ip for ip in behind if '.' in ip]) > 1:
-        return 'a MAC address several devices share'
     return None
+
+
+def by_family(ips):
+    """Addresses sorted IPv4 first."""
+    return sorted(ips, key=lambda ip: (':' in ip, ip))
+
+
+def shared(table, mac, exc):
+    """Whether ARP shows a MAC address with more than one IPv4 address now: a repeater that puts its own
+    MAC address on its clients' traffic, whose clients are as many devices. Only IPv4 tells: a device has
+    one IPv4 address on a segment and many IPv6 ones. An exception's address is not counted: the gateway's
+    or the page client's address under a device's MAC address says it answers ARP for another's, not
+    that several devices are behind it."""
+    return len([ip for ip in addresses_of(table, mac) if '.' in ip and ip not in exc.get('addr', {})]) > 1
+
+
+def follow(item, mac, table, exc, now):
+    """One run's look at an isolated MAC address (its item in STATE): every address ARP and NDP show for
+    it now is remembered (item['seen'], with when), and held for the rest of its isolation (held()) - a
+    device quiet for a while loses its ARP entry, and was let through when it spoke again until the next
+    run. Not while it is shared: the first run ARP shows it with more than one IPv4 address marks it so
+    for the rest of its isolation, and from then on it takes no new address - those are its clients'."""
+    seen = item.get('seen') if isinstance(item.get('seen'), dict) else {}
+    now_at = [ip for ip in addresses_of(table, mac) if not link_local(ip)]
+    if not item.get('shared') and shared(table, mac, exc):
+        item['shared'] = True
+        log('isolate: %s shows more than one IPv4 address (%s): held by what reached the list and what it '
+            'had alone, not by the addresses of its other clients' % (mac, ', '.join(ip for ip in now_at if '.' in ip)))
+    if not item.get('shared'):
+        for ip in now_at:
+            if ip not in exc['addr']:
+                seen[ip] = now
+    item['seen'] = seen
+    item['shared'] = bool(item.get('shared'))
+
+
+def held(item, mac, table, exc):
+    """The addresses held for one isolated MAC address: those that reached the list, those ARP and NDP
+    show for it now (not for a shared one), and those it was seen with during its isolation, newest
+    first - never a link-local one (a table has no scope), an exception's (a device answering ARP for a
+    gateway's address does not have it put into the table), or one ARP or NDP shows under another MAC
+    address now: another device has it by then."""
+    ranked = by_family(listed(item.get('addresses')))
+    if not item.get('shared'):
+        ranked += by_family(addresses_of(table, mac))
+    seen = item.get('seen') if isinstance(item.get('seen'), dict) else {}
+    ranked += [ip for ip, _ in sorted(seen.items(), key=lambda kv: (-number(kv[1]), str(kv[0])))]
+    out = []
+    for ip in (norm_ip(a) for a in ranked):
+        if not ip or ip in out or link_local(ip) or ip in exc.get('addr', {}):
+            continue
+        if any(m != mac for m in macs_at(table, ip)):
+            continue
+        out.append(ip)
+    return out
 
 
 def held_back(record, now):
@@ -441,20 +539,25 @@ def step(state, entries, exc, on, hours, now):
         released.clear()
         state['skipped'] = {}
         return [], gone
+    table = exc.get('table') or {}
     for mac, item in list(isolated.items()):
         why = None
         # never longer than the duration from now: a shorter one set, or the clock stepped back
         item['until'] = min(number(item.get('until')), now + hours * 3600)
         if now >= item['until']:
             why = 'expired'
-        elif mac in exc['mac'] or any(a in exc['addr'] for a in listed(item.get('addresses'))) or \
-                why_not({'address': '', 'mac': mac}, exc):
-            why = 'an exception'
+        elif mac in exc.get('own_macs', ()):
+            why = 'this firewall'
+        # and for nothing else: an exception's address it answers ARP for, an address it takes - it made
+        # its MAC address "shared" with a second IPv4 one - or a connection it opens would have let it go.
+        # Such an address is kept out of the table instead (held()).
         if why:
             released[mac] = {'last': max(released_last(entries, mac), number(item.get('last'))), 'until': 0,
                              'addresses': listed(item.get('addresses'))}
             gone.append(mac)
             del isolated[mac]
+        else:
+            follow(item, mac, table, exc, now)
     skipped = {}
     added = []
     if exc.get('blind'):
@@ -484,9 +587,12 @@ def step(state, entries, exc, on, hours, now):
             skipped[entry['address']] = {'mac': mac, 'reason': 'undone', 'last': last,
                                          'list': entry.get('list', ''), 'name': entry.get('name', '')}
             continue
+        # a MAC address ARP shows with more than one IPv4 address now is isolated too, by its own
+        # addresses only: follow() finds it shared from the start, and it takes none of its clients'
         isolated[mac] = {'addresses': [entry['address']], 'list': entry.get('list', ''),
                          'name': entry.get('name', ''), 'since': now, 'until': now + hours * 3600,
-                         'last': last}
+                         'last': last, 'seen': {}, 'shared': False}
+        follow(isolated[mac], mac, table, exc, now)
         released.pop(mac, None)
         added.append(mac)
     # a let-go device is remembered while it is held back, or os-netreport keeps an entry of its MAC
@@ -535,17 +641,16 @@ def table_now():
 
 
 def blocked_addresses(state, exc):
-    """The addresses the isolated devices' MAC addresses have in the ARP and NDP tables now, as OPNsense
-    resolves a MAC alias - without link-local ones (a table has no scope) and, a last guard, without an
-    exception's."""
+    """What the table is to hold: every isolated device's held() addresses - each device's kept in STATE
+    (its 'held'), for the page to say whether pf holds them."""
     table = exc.get('table')
     if table is None:
         table = neighbours()
     out = set()
-    for mac in state.get('isolated') or {}:
-        for ip in addresses_of(table, mac):
-            if not ipaddress.ip_address(ip).is_link_local and ip not in exc.get('addr', {}):
-                out.add(ip)
+    for mac, item in (state.get('isolated') or {}).items():
+        if isinstance(item, dict):
+            item['held'] = held(item, mac, table, exc)
+            out.update(item['held'])
     return sorted(out)
 
 
@@ -598,8 +703,9 @@ def commit(state, added, gone, summary, exc, alias):
         log('isolation list not put into the firewall: %s' % '; '.join(answer.get('errors') or ['failed']))
     for mac in added:
         item = state['isolated'][mac]
-        log('isolated %s (%s): reached %s, until %s' % (mac, ', '.join(item['addresses']), item.get('list') or '?',
-            time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(item['until']))))
+        log('isolated %s (%s): reached %s, until %s%s' % (mac, ', '.join(item['addresses']), item.get('list') or '?',
+            time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(item['until'])),
+            '; a MAC address several devices share: only its own addresses held' if item.get('shared') else ''))
     for mac in gone:
         log('isolation of %s ended' % mac)
     save(STATE, state)
@@ -643,16 +749,21 @@ def do_list(client, now=None):
         return {'status': 'failed', 'message': NOT_READ}
     on, hours = settings(root)
     state = load(STATE, {})
-    if remember_client(state, client, now):
+    table = neighbours()
+    if remember_client(state, client, now, table):
         save(STATE, state)
     rows = []
-    # what pf holds, against what each isolated device has now: a row the table does not hold is said
-    held, table = set(table_now() or []), neighbours()
+    # what pf holds, against what the last run asked it to hold for each device (its 'held'): a row the
+    # table does not hold is said - one with nothing to hold too - and one ARP and NDP show no address of
+    # now (addresses_now) is said, not drawn as held
+    in_table = set(table_now() or [])
     for mac, item in sorted((state.get('isolated') or {}).items()):
-        now_at = [ip for ip in addresses_of(table, mac) if not ipaddress.ip_address(ip).is_link_local]
+        now_at = [ip for ip in addresses_of(table, mac) if not link_local(ip)]
+        holding = [ip for ip in listed(item.get('held')) if norm_ip(ip)]
         rows.append({'mac': mac, 'addresses': listed(item.get('addresses')), 'list': item.get('list', ''),
                      'name': item.get('name', ''), 'since': item.get('since'), 'until': item.get('until'),
-                     'addresses_now': now_at, 'held': all(ip in held for ip in now_at)})
+                     'holding': holding, 'addresses_now': now_at, 'shared': bool(item.get('shared')),
+                     'held': bool(holding) and all(ip in in_table for ip in holding)})
     entries = infected(state)
     others = [{'address': ip, 'mac': '', 'name': e.get('name', ''), 'list': e.get('list', ''),
                'last': e.get('last'), 'reason': 'no MAC'} for ip, e in sorted(entries.items()) if not e['mac']]
