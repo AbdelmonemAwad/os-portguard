@@ -39,4 +39,8 @@ while read -r table; do
     grep -q "<name>${table}</name>" /conf/config.xml 2> /dev/null && continue
     /sbin/pfctl -t "${table}" -T flush > /dev/null 2>&1 || true
 done
+# The isolated devices' table (portguard_isolated, an external alias whose table isolate.py kept):
+# emptied in any case. Nothing else fills it, and kept with the settings it would isolate its
+# devices again for a minute after a reinstall.
+/sbin/pfctl -t portguard_isolated -T flush > /dev/null 2>&1 || true
 echo "Port Guard removed; its alias stays in Firewall: Aliases"
