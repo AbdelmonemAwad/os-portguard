@@ -15,8 +15,8 @@
   * plugins.inc.d/portguard.inc - the isolated devices' rules registered while automatic isolation is
     on and its alias there, whether or not the blocked devices are (with php, where it is installed).
 
-The commands they call (ifconfig, arp, ndp, route, pfctl, isolate.php) are small scripts here that
-print what a firewall would. POSIX only (fcntl, sh): run it on Linux or FreeBSD, or under WSL.
+The commands they call (ifconfig, arp, ndp, route, pfctl, cut.py) are small scripts here that print
+what a firewall would; pfctl keeps the isolated devices' table in a file. POSIX only (fcntl, sh): run it on Linux or FreeBSD, or under WSL.
 
     python3 tools/test-isolate.py"""
 import importlib.util
@@ -100,27 +100,39 @@ with open(os.path.join(ROUTERS, 'igb2_routerv6'), 'w', encoding='utf-8') as fh:
 with open(os.path.join(ROUTERS, 'igb0_nameserver'), 'w', encoding='utf-8') as fh:
     fh.write('198.51.100.200\n')
 
-# isolate.php stands in: records what it was asked and writes the alias into config.xml as the real
-# one does through OPNsense's model
+# pfctl stands in for the isolated devices' table: a file holds what it holds, every replace or flush is recorded
+# (WRITES, the addresses as a JSON list a line), and it lists no state; cut.py stands in, counting its runs
+TABLE = os.path.join(TOP, 'table-portguard_isolated')
 WRITES = os.path.join(TOP, 'writes.jsonl')
-writer = os.path.join(TOP, 'isolate-php.py')
-with open(writer, 'w', encoding='utf-8') as fh:
-    fh.write('''import json, re, sys
-config, writes, macs = sys.argv[1], sys.argv[2], sys.argv[3:]
-with open(writes, 'a') as f:
-    f.write(json.dumps(macs) + '\\n')
-text = open(config).read()
-text = re.sub(r'<alias><name>portguard_isolated</name>.*?</alias>', '', text, flags=re.S)
-if macs:
-    text = text.replace('</aliases>', '<alias><name>portguard_isolated</name><enabled>1</enabled><type>mac</type>'
-                        '<content>%s</content></alias></aliases>' % chr(10).join(macs))
-open(config, 'w').write(text)
-print(json.dumps({'status': 'ok', 'changes': ['portguard_isolated: written']}))
+CUTS = os.path.join(TOP, 'cuts')
+pf = os.path.join(TOP, 'pfctl-table.py')
+with open(pf, 'w', encoding='utf-8') as fh:
+    fh.write('''import json, os, sys
+table, writes, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+if args[:1] == ['-ss']:
+    sys.exit(0)
+if args[:2] != ['-t', 'portguard_isolated'] or not os.path.exists(table):
+    sys.stderr.write('pfctl: Table does not exist.\\n')
+    sys.exit(1)
+op = args[3] if len(args) > 3 else ''
+if op == 'show':
+    sys.stdout.write(open(table).read())
+elif op in ('replace', 'flush'):
+    addrs = sorted(args[4:]) if op == 'replace' else []
+    open(table, 'w').write(''.join('   %s\\n' % a for a in addrs))
+    with open(writes, 'a') as f:
+        f.write(json.dumps(addrs) + '\\n')
 ''')
-tool('isolate.php', '"%s" "%s" "%s" "%s" "$@"' % (sys.executable, writer, CONFIG, WRITES))
+tool('pfctl-table', '"%s" "%s" "%s" "%s" "$@"' % (sys.executable, pf, TABLE, WRITES))
+open(TABLE, 'w').close()           # the table there, as the filter makes it for the external alias
+tool('cut-standin', 'echo run >> "%s"; echo \'{"status": "ok"}\'' % CUTS)
+ISOLATED_ALIAS = '<alias><name>portguard_isolated</name><enabled>1</enabled><type>external</type><content/></alias>'
 
 
 def config(auto=None, hours=None, enabled='1', aliases=''):
+    """config.xml; with automatic isolation on, the external alias apply.php makes for it at Apply."""
+    if auto == '1' and 'portguard_isolated' not in aliases:
+        aliases += ISOLATED_ALIAS
     general = '<enabled>%s</enabled><log>0</log>' % enabled
     if auto is not None:
         general += '<auto_isolate>%s</auto_isolate>' % auto
@@ -156,7 +168,7 @@ iso.STATE_DIR = os.path.join(TOP, 'db')
 iso.STATE = os.path.join(iso.STATE_DIR, 'isolate.json')
 iso.LOCK = os.path.join(iso.STATE_DIR, 'isolate.lock')
 iso.IFCONFIG, iso.ARP, iso.NDP, iso.ROUTE = (os.path.join(BIN, n) for n in ('ifconfig', 'arp', 'ndp', 'route'))
-iso.ALIAS_WRITER = os.path.join(BIN, 'isolate.php')
+iso.PFCTL, iso.CUT = os.path.join(BIN, 'pfctl-table'), os.path.join(BIN, 'cut-standin')
 logged = []
 iso.log = logged.append
 os.makedirs(iso.STATE_DIR)
@@ -207,7 +219,9 @@ item = state()['isolated'][BAD_MAC]
 check('isolated: both its addresses, its list, its name', (item['addresses'], item['list'], item['name']),
       (['192.0.2.66', '2001:db8::66'], 'feodo', 'camera'))
 check('isolated: until now + the duration', (item['since'], item['until']), (NOW, NOW + 2 * 3600))
-check('the alias written with the isolated MAC only', writes(), [[BAD_MAC]])
+check('the table made to hold the address the isolated MAC address has now (NDP), not the others\'',
+      writes(), [['2001:db8::66']])
+check('... and the cut run for what it gained', open(CUTS).read().split(), ['run'])
 check('an entry an hour old: not isolated', BAD2_MAC in state()['isolated'], False)
 skipped = state()['skipped']
 check('the firewall, its MAC, the gateway and its MAC: not isolated, each with why',
@@ -225,7 +239,7 @@ check('list: no MAC listed as such, and the exceptions', reasons,
        '203.0.113.1': 'a gateway', '192.0.2.71': 'a gateway'})
 check('list: the page client kept with its MAC', state()['managers']['192.0.2.50'], {'at': NOW, 'mac': ADMIN_MAC})
 
-check('a second run, nothing new: the alias not written again', (iso.do_run(NOW + 60).get('added'), len(writes())),
+check('a second run, nothing new: the table not written again', (iso.do_run(NOW + 60).get('added'), len(writes())),
       ([], 1))
 
 # an entry written without a MAC address takes the one ARP holds for its address; one ARP does not know stays empty
@@ -277,7 +291,7 @@ iso.do_undo(ADMIN_MAC, '', NOW + 131)
 infected({'192.0.2.66': entry(NOW - 60, BAD_MAC), '2001:db8::66': entry(NOW - 30, BAD_MAC)})
 n = len(writes())
 answer = iso.do_undo(BAD_MAC, '192.0.2.50', NOW + 200)
-check('undo: ok, let go at once, the alias rewritten without it',
+check('undo: ok, let go at once, the table emptied of it',
       (answer.get('status'), BAD_MAC in state()['isolated'], writes()[n:]), ('ok', False, [[]]))
 check('undo: held back against the newest "last" of its entries, until its isolation would have ended',
       (state()['released'][BAD_MAC]['last'], state()['released'][BAD_MAC]['until']), (NOW - 30, NOW + 2 * 3600))
@@ -304,24 +318,41 @@ check('expired: let go, and not again for the same entry', (BAD_MAC in state()['
 infected({'192.0.2.66': entry(until + 10, BAD_MAC)})
 iso.do_run(until + 20)
 check('a newer connection after expiry: isolated again', BAD_MAC in state()['isolated'], True)
-config(auto='0', aliases='<alias><name>portguard_isolated</name><enabled>1</enabled><type>mac</type>'
-       '<content>%s</content></alias>' % BAD_MAC)
+config(auto='0')
 n = len(writes())
 answer = iso.do_run(until + 30)
-check('turned off: every device let go, the alias emptied', (state()['isolated'], answer.get('let_go'), writes()[n:]),
+check('turned off (the alias gone at Apply): every device let go, the table emptied all the same', (state()['isolated'], answer.get('let_go'), writes()[n:]),
       ({}, [BAD_MAC], [[]]))
 check('off again, nothing left: nothing written', (iso.do_run(until + 90).get('message'), len(writes())),
       ('isolate: off', n + 1))
 
 # ---------------------------------------------------------------- the list lost
 
-config(auto='1', aliases='<alias><name>portguard_isolated</name><enabled>1</enabled><type>mac</type>'
-       '<content>%s</content></alias>' % BAD2_MAC)
+config(auto='1')
+with open(TABLE, 'w', encoding='utf-8') as fh:
+    fh.write('   192.0.2.67\n')
 os.remove(iso.STATE)
 infected({})
 n = len(writes())
 iso.do_run(until + 100)
-check('the list lost (a /var in memory, a reboot): the alias emptied', writes()[n:], [[]])
+check('the list lost (a /var in memory, a reboot): the table emptied', writes()[n:], [[]])
+# no table (the alias not made: Apply not pressed) while a device is to be isolated: said, nothing written
+os.remove(TABLE)
+infected({'192.0.2.66': entry(until + 100, BAD_MAC)})
+answer = iso.do_run(until + 110)
+check('no table to fill: isolated in the list, the firewall part failed with why',
+      (BAD_MAC in state()['isolated'], answer['firewall']['status'], answer['firewall']['errors']),
+      (True, 'failed', ['no table portguard_isolated: Apply on the Settings tab makes it']))
+listing = iso.do_list('', until + 120)
+check('the list says the firewall does not hold its addresses', [d['held'] for d in listing['isolated']], [False])
+open(TABLE, 'w').close()
+iso.do_run(until + 130)
+listing = iso.do_list('', until + 140)
+check('... and that it does once the table is there and filled', ([d['held'] for d in listing['isolated']],
+      [d['addresses_now'] for d in listing['isolated']]), ([True], [['2001:db8::66']]))
+iso.do_undo(BAD_MAC, '', until + 150)
+os.remove(iso.STATE)
+infected({})
 config(auto='1', hours='99999')
 check('a duration out of range is held to 720 hours', iso.settings(), (True, 720))
 config(auto='1', hours='x')

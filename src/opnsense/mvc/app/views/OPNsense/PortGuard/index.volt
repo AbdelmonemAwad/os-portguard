@@ -193,9 +193,15 @@
             $('#pg-isolate-note').text(plain("{{ lang._('Automatic isolation is off; it is turned on under Settings.') }}"))
                 .toggle(!data.on);
             (data.isolated || []).forEach(function (d) {
+                /* the firewall's table not holding what the device has now: said, not hidden */
+                const $where = $('<td/>').text((d.addresses || []).join(' '));
+                if (d.held === false) {
+                    $where.append($('<div class="text-warning"/>')
+                        .text(plain("{{ lang._('The firewall does not hold its addresses now.') }}")));
+                }
                 $rows.append($('<tr/>')
                     .append($('<td/>').append($('<code/>').text(d.mac)))
-                    .append($('<td/>').text((d.addresses || []).join(' ')))
+                    .append($where)
                     .append($('<td/>').text(plain(d.name || '')))
                     .append($('<td/>').text(reached(d.list)))
                     .append($('<td/>').text(when(d.since)))

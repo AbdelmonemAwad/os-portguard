@@ -30,6 +30,8 @@ use OPNsense\Firewall\Alias;
 use OPNsense\PortGuard\PortGuard;
 
 const NAME = 'portguard_blocked';
+/* the isolated devices' alias: external, its table kept by isolate.py with pfctl (2026-11-17) */
+const ISOLATED = 'portguard_isolated';
 
 $settings = new PortGuard();
 $macs = [];
@@ -76,6 +78,45 @@ if (empty($macs)) {
     $report[] = count($macs) . ' device(s)';
 }
 
+/*
+ * The isolated devices (2026-11-17): portguard_isolated, an external alias - OPNsense's "External
+ * (advanced)", its table's addresses kept by isolate.py with pfctl, so that an isolation writes no
+ * config.xml and reloads no filter - there while automatic isolation is on, for its rules
+ * (plugins.inc.d/portguard.inc); removed, and its table emptied, when it is off. config.xml is saved
+ * for it here, at Apply, never at an isolation.
+ */
+$isolating = (string)$settings->general->auto_isolate === '1';
+$inode = $model->getByName(ISOLATED);
+$isolated_gone = false;
+if ($isolating) {
+    if ($inode === null) {
+        $inode = $model->aliases->alias->Add();
+        $inode->name = ISOLATED;
+        $report[] = ISOLATED . ': added';
+    } elseif ((string)$inode->type !== 'external' || (string)$inode->enabled !== '1') {
+        $report[] = ISOLATED . ': made external';
+    }
+    $inode->enabled = '1';
+    $inode->type = 'external';
+    $inode->content = '';
+    $inode->counters = '1';
+    $inode->description = 'Port Guard: isolated devices (kept by isolate.py)';
+} elseif ($inode !== null) {
+    $text = file_get_contents('/conf/config.xml');
+    if (preg_match_all('/\b' . ISOLATED . '\b/', $text) > 1) {
+        $inode->enabled = '0';
+        $report[] = ISOLATED . ': automatic isolation off, but named elsewhere in the configuration - switched off, not removed';
+    } else {
+        foreach ($model->aliases->alias->iterateItems() as $uuid => $alias) {
+            if ((string)$alias->name === ISOLATED) {
+                $model->aliases->alias->del($uuid);
+            }
+        }
+        $report[] = ISOLATED . ': removed';
+    }
+    $isolated_gone = true;
+}
+
 $messages = [];
 foreach ($model->performValidation() as $message) {
     $messages[] = $message->getField() . ': ' . $message->getMessage();
@@ -94,6 +135,10 @@ if (empty($macs)) {
      * nothing a rule could use again.
      */
     exec('/sbin/pfctl -t ' . NAME . ' -T flush 2>&1');
+}
+if ($isolated_gone) {
+    /* the isolated devices' table outlives its alias as the blocked devices' does */
+    exec('/sbin/pfctl -t ' . ISOLATED . ' -T flush 2>&1');
 }
 
 /* the order Firewall: Aliases and the page's Apply always used: the filter, its template, the aliases */

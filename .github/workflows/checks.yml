@@ -46,7 +46,7 @@ jobs:
       - uses: actions/checkout@v7
 
       # isolate.py, cut.py's isolated table and the rules hook, against files in a temporary directory
-      # and small scripts standing in for ifconfig, arp, ndp, route, pfctl and isolate.php: who is
+      # and small scripts standing in for ifconfig, arp, ndp, route, pfctl and cut.py: who is
       # isolated and who never is, undo, expiry, the option off. php is the runner's, for the hook.
       - name: Automatic isolation against files standing in for the firewall
         run: python3 tools/test-isolate.py

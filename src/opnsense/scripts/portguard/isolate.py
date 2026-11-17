@@ -17,11 +17,15 @@ connection, "list" the os-blocklists feed, "mac" and "name" empty where it knows
 WHAT IT DOES, while "Isolate devices that reach a command-and-control list" (general.auto_isolate,
 off by default) is on: every entry whose MAC address is known and whose "last" is within the last
 RECENT seconds puts that MAC address on the isolation list, until now + general.isolate_hours (24 by
-default). The list is a separate MAC alias, portguard_isolated, written by isolate.php the way
-apply.php writes portguard_blocked, blocked both ways by plugins.inc.d/portguard.inc's rules, and the
-open connections of its addresses cut by cut.py - the plugin's own way of blocking a MAC address and
-cutting its connections, used for a second list. An entry without a MAC address is not isolated, and
-the page lists it as such.
+default). The firewall blocks it through an alias of its own, portguard_isolated: an external alias
+(OPNsense's "External (advanced)"), which apply.php makes at the page's Apply while automatic isolation
+is on and plugins.inc.d/portguard.inc's rules block both ways. Its table is kept here, with pfctl: at
+every run it is made to hold the addresses the isolated MAC addresses have in the ARP and NDP tables
+then (as OPNsense resolves a MAC alias; a link-local address has no place in a table), and cut.py cuts
+the open connections of the addresses it gains. So an isolation writes nothing into config.xml (no
+backup pushed out, nothing saved over a change made in the GUI meanwhile) and reloads no filter, and a
+firewall that takes over in HA starts with an empty table. An entry without a MAC address that ARP or
+NDP does not know either is not isolated, and the page lists it as such.
 
 NEVER ISOLATED - a fixed exception, checked at every run, for the isolated ones too: the firewall's own
 addresses and MAC addresses (ifconfig), its gateways' addresses (config.xml, the routers OPNsense keeps
@@ -42,9 +46,9 @@ AN ENTRY WITHOUT A MAC ADDRESS takes the one ARP or NDP holds for its address wh
 and keeps it while its "last" is the same (STATE's macs): a device that later gets that address is
 not taken for it, and an entry ARP does not answer for in one run keeps its device.
 
-The list is kept in STATE (/var/db/os-portguard/isolate.json), not in config.xml, which is saved only
-when the alias changes. The alias is always made from STATE: where STATE is lost - a /var in memory
-after a reboot - the alias is emptied and nobody stays isolated with nothing on the page to undo it.
+The list is kept in STATE (/var/db/os-portguard/isolate.json), not in config.xml. The table is always
+made from STATE: where STATE is lost - a /var in memory after a reboot - the table is emptied and nobody
+stays isolated with nothing on the page to undo it.
 
 Never fails its caller: prints one JSON object and exits 0; what it could not do is in the answer and
 in the system log, under portguard.
@@ -66,12 +70,12 @@ STATE_DIR = '/var/db/os-portguard'
 STATE = os.path.join(STATE_DIR, 'isolate.json')
 LOCK = os.path.join(STATE_DIR, 'isolate.lock')
 ALIAS = 'portguard_isolated'
-ALIAS_WRITER = '/usr/local/opnsense/scripts/portguard/isolate.php'
 IFCONFIG = '/sbin/ifconfig'
 ARP = '/usr/sbin/arp'
 NDP = '/usr/sbin/ndp'
 ROUTE = '/sbin/route'
 PFCTL = '/sbin/pfctl'
+CUT = '/usr/local/opnsense/scripts/portguard/cut.py'
 ROUTERS = '/tmp'            # OPNsense's <interface>_router and _routerv6 files: a dynamic gateway's address
 TAG = 'portguard'
 RECENT = 600                # an entry is acted on while its latest blocked connection is this recent
@@ -482,42 +486,89 @@ def step(state, entries, exc, on, hours, now):
     return added, gone
 
 
-def alias_now():
-    """The MAC addresses the portguard_isolated alias in config.xml holds now, sorted; [] where it is
-    missing or off, None where config.xml cannot be read."""
+def alias_ready():
+    """Whether the isolated devices' alias is there to be filled: in config.xml, external and on - made at
+    the page's Apply while automatic isolation is on (apply.php). None where config.xml cannot be read."""
     try:
         root = ET.parse(CONFIG).getroot()
     except (OSError, ET.ParseError):
         return None
     for alias in root.findall('OPNsense/Firewall/Alias/aliases/alias'):
         if alias.findtext('name') == ALIAS:
-            if (alias.findtext('enabled') or '1') != '1':
-                return []
-            return sorted(filter(None, (norm_mac(m) for m in (alias.findtext('content') or '').split())))
-    return []
+            return (alias.findtext('enabled') or '1') == '1' and (alias.findtext('type') or '') == 'external'
+    return False
 
 
-def put_into_firewall(macs):
-    """The alias made to hold these MAC addresses, the filter and aliases reloaded and the
-    connections of the isolated devices cut: isolate.php. Its answer, or an error."""
+def table_now():
+    """The addresses pf's isolated devices' table holds now, sorted; None where there is no such table."""
     try:
-        out = subprocess.run([ALIAS_WRITER] + sorted(macs), capture_output=True, text=True, timeout=300).stdout
-        answer = json.loads(out.strip().splitlines()[-1]) if out.strip() else {}
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError) as e:
+        r = subprocess.run([PFCTL, '-t', ALIAS, '-T', 'show'], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return sorted({norm_ip(line) for line in r.stdout.splitlines() if norm_ip(line)})
+
+
+def blocked_addresses(state, exc):
+    """The addresses the isolated devices' MAC addresses have in the ARP and NDP tables now, as OPNsense
+    resolves a MAC alias - without link-local ones (a table has no scope) and, a last guard, without an
+    exception's."""
+    table = exc.get('table')
+    if table is None:
+        table = neighbours()
+    out = set()
+    for mac in state.get('isolated') or {}:
+        for ip in addresses_of(table, mac):
+            if not ipaddress.ip_address(ip).is_link_local and ip not in exc.get('addr', {}):
+                out.add(ip)
+    return sorted(out)
+
+
+def fill_table(want):
+    """pf's table made to hold these addresses, and the open connections of those it gains cut (cut.py,
+    as the page's Apply runs it). The firewall's part of the summary."""
+    have = table_now()
+    if have is None:
+        return {'status': 'failed', 'errors': ['no table %s: Apply on the Settings tab makes it' % ALIAS]}
+    if have == want:
+        return {'status': 'ok', 'held': len(have)}
+    args = [PFCTL, '-t', ALIAS, '-T', 'replace'] + want if want else [PFCTL, '-t', ALIAS, '-T', 'flush']
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
         return {'status': 'failed', 'errors': [str(e)]}
-    return answer if isinstance(answer, dict) else {'status': 'failed'}
+    if r.returncode != 0:
+        return {'status': 'failed', 'errors': [(r.stderr or r.stdout).strip()[:200] or 'pfctl failed']}
+    answer = {'status': 'ok', 'held': len(want), 'added': sorted(set(want) - set(have)),
+              'removed': sorted(set(have) - set(want))}
+    if answer['added']:
+        out = run_cmd([CUT], timeout=120).strip()
+        try:
+            answer['cut'] = json.loads(out.splitlines()[-1]) if out else None
+        except ValueError:
+            answer['cut'] = None
+    return answer
 
 
-def commit(state, added, gone, summary):
-    """STATE written; the alias rewritten when it does not hold what STATE lists - so a STATE that was
-    lost empties it."""
-    want = sorted(state.get('isolated', {}))
-    have = alias_now()
-    if have is not None and want != have:
-        answer = put_into_firewall(want)
-        summary['firewall'] = answer
-        if answer.get('status') != 'ok':
-            log('isolation list not put into the firewall: %s' % '; '.join(answer.get('errors') or ['failed']))
+def commit(state, added, gone, summary, exc=None):
+    """STATE written, and pf's table made to hold the addresses the isolated devices have now - at every
+    run, as addresses move (a lease renewed), and so that a STATE that was lost empties it."""
+    exc = exc or {'addr': {}, 'mac': {}}
+    want = blocked_addresses(state, exc) if state.get('isolated') else []
+    ready = alias_ready()
+    if ready or (not want and table_now()):
+        # nothing to hold and the table still holding addresses (isolation turned off, its alias gone or
+        # switched off): emptied all the same - nobody stays isolated with nothing on the page
+        answer = fill_table(want)
+    elif want:
+        answer = {'status': 'failed', 'errors': ['the alias %s is not there: Apply on the Settings tab makes it'
+                                                 % ALIAS]}
+    else:
+        answer = {'status': 'ok', 'held': 0}
+    summary['firewall'] = answer
+    if answer.get('status') != 'ok':
+        log('isolation list not put into the firewall: %s' % '; '.join(answer.get('errors') or ['failed']))
     for mac in added:
         item = state['isolated'][mac]
         log('isolated %s (%s): reached %s, until %s' % (mac, ', '.join(item['addresses']), item.get('list') or '?',
@@ -535,15 +586,15 @@ def do_run(now=None):
     if on is None:
         summary['message'] = 'isolate: config.xml could not be read; nothing changed'
         return summary
-    # off, nothing isolated and no alias left: once a minute, nothing to write
-    if not on and not state.get('isolated') and not state.get('released') and not alias_now():
+    # off, nothing isolated and nothing in the table: once a minute, nothing to write
+    if not on and not state.get('isolated') and not state.get('released') and not table_now():
         summary['message'] = 'isolate: off'
         return summary
     entries = infected(state) if on else {}
     exc = exceptions(state, now) if on else {'addr': {}, 'mac': {}}
     added, gone = step(state, entries, exc, on, hours, now)
     summary.update({'isolated': sorted(state['isolated']), 'added': added, 'let_go': gone})
-    commit(state, added, gone, summary)
+    commit(state, added, gone, summary, exc)
     if exc.get('blind'):
         log('isolate: this firewall\'s own addresses could not be read (ifconfig): nothing new isolated')
         summary['message'] = 'isolate: this firewall\'s own addresses could not be read; nothing new isolated'
@@ -559,9 +610,13 @@ def do_list(client, now=None):
     if remember_client(state, client, now):
         save(STATE, state)
     rows = []
+    # what pf holds, against what each isolated device has now: a row the table does not hold is said
+    held, table = set(table_now() or []), neighbours()
     for mac, item in sorted((state.get('isolated') or {}).items()):
+        now_at = [ip for ip in addresses_of(table, mac) if not ipaddress.ip_address(ip).is_link_local]
         rows.append({'mac': mac, 'addresses': listed(item.get('addresses')), 'list': item.get('list', ''),
-                     'name': item.get('name', ''), 'since': item.get('since'), 'until': item.get('until')})
+                     'name': item.get('name', ''), 'since': item.get('since'), 'until': item.get('until'),
+                     'addresses_now': now_at, 'held': all(ip in held for ip in now_at)})
     entries = infected(state)
     others = [{'address': ip, 'mac': '', 'name': e.get('name', ''), 'list': e.get('list', ''),
                'last': e.get('last'), 'reason': 'no MAC'} for ip, e in sorted(entries.items()) if not e['mac']]

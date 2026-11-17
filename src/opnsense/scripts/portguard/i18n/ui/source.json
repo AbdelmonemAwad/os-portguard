@@ -35,6 +35,7 @@
  "Settings",
  "Status could not be read.",
  "The device is let through at once. It is not isolated again before its isolation would have ended, and after that only when os-netreport records a newer connection of it to a command-and-control list.",
+ "The firewall does not hold its addresses now.",
  "The isolation could not be undone.",
  "Undo",
  "Undo the isolation",
