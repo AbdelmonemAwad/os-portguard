@@ -52,4 +52,40 @@ class ServiceController extends ApiControllerBase
         $result = json_decode((new Backend())->configdRun('portguard apply'), true);
         return is_array($result) ? $result : ['status' => 'failed'];
     }
+
+    /**
+     * the Isolated devices tab: the devices isolated for reaching a command-and-control list, and those
+     * that were not, with why. The address this page is opened from goes with it: isolate.py keeps it as
+     * an exception it never isolates (the plan's fixed exception).
+     */
+    public function isolatedAction()
+    {
+        $result = json_decode((new Backend())->configdpRun('portguard isolated', [$this->clientAddress()]), true);
+        return is_array($result) ? $result : ['error' => gettext('Status could not be read.')];
+    }
+
+    /**
+     * Undo: an isolated device let go at once, by its MAC address; not isolated again before its
+     * isolation would have ended, and after that only when os-netreport records a newer connection of it
+     * to a command-and-control list
+     */
+    public function releaseAction()
+    {
+        if (!$this->request->isPost()) {
+            return ['status' => 'failed'];
+        }
+        $mac = strtolower(trim((string)$this->request->getPost('mac')));
+        if (!preg_match('/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/', $mac)) {
+            return ['status' => 'failed', 'message' => 'mac'];
+        }
+        $result = json_decode((new Backend())->configdpRun('portguard release', [$mac, $this->clientAddress()]), true);
+        return is_array($result) ? $result : ['status' => 'failed'];
+    }
+
+    /* the address this request came from, as the web server saw it; '' when it is not an address */
+    private function clientAddress()
+    {
+        $address = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+        return filter_var($address, FILTER_VALIDATE_IP) !== false ? $address : '';
+    }
 }

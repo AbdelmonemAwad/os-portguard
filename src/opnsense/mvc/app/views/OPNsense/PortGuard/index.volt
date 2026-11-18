@@ -3,7 +3,8 @@
  # Copyright (c) 2026 Abdelmonem Awad <eg2@live.com>
  #
  # Firewall: Port Guard (XGS: Port Guard when os-xgs-npu is installed) - the devices blocked by their
- # MAC address, and the devices the firewall sees, each a click from being blocked.
+ # MAC address, and the devices the firewall sees, each a click from being blocked - and the devices
+ # isolated for reaching a command-and-control list (isolate.py), each with an undo button.
  #}
 
 <style>
@@ -157,6 +158,107 @@
                 });
         });
 
+        /* The Isolated devices tab: what isolate.py isolated, why and until when, each with Undo; and
+           what os-netreport recorded that was not isolated, with why. Reading it also tells isolate.py
+           the address this page is opened from, which it never isolates. */
+        const not_why = {
+            'no MAC': "{{ lang._('not isolated: no MAC') }}",
+            'this firewall': "{{ lang._('not isolated: this firewall') }}",
+            'a gateway': "{{ lang._('not isolated: a gateway') }}",
+            'the address this page is opened from': "{{ lang._('not isolated: an address this page was opened from') }}",
+            'the HA peer': "{{ lang._('not isolated: the HA peer') }}",
+            'logged in to the web GUI or SSH of this firewall': "{{ lang._('not isolated: logged in to the web GUI or SSH of this firewall') }}",
+            'undone': "{{ lang._('not isolated again: undone, until its isolation would have ended and a newer connection') }}",
+            'expired': "{{ lang._('not isolated again: its isolation ended, until a newer connection') }}",
+            'turned off': "{{ lang._('not isolated again: let go when automatic isolation was turned off, until a newer connection') }}",
+            'firewall MAC': "{{ lang._('not isolated again: let go as a MAC address of this firewall, until a newer connection') }}"
+        };
+
+        function when(seconds) {
+            return seconds ? new Date(seconds * 1000).toLocaleString() : '';
+        }
+
+        function reached(list) {
+            return "{{ lang._('reached %s') }}".replace('%s', plain(list || '?'));
+        }
+
+        function draw_isolated(data) {
+            const $rows = $('#pg-isolated tbody').empty();
+            const $others = $('#pg-not-isolated tbody').empty();
+            /* a list that could not be read (another run holds the list, isolate.py stopped) is said so,
+               not drawn as "off" and empty */
+            if (!data || data.error || data.status === 'failed' || typeof data.on !== 'boolean') {
+                $('#pg-isolate-note').text(plain("{{ lang._('Status could not be read.') }}") +
+                    (data && data.message ? ' (' + plain(data.message) + ')' : '')).show();
+                return;
+            }
+            $('#pg-isolate-note').text(plain("{{ lang._('Automatic isolation is off; it is turned on under Settings.') }}"))
+                .toggle(!data.on);
+            (data.isolated || []).forEach(function (d) {
+                /* the addresses held for it (those that reached the list where none is); a device ARP and
+                   NDP show no address of now, one whose MAC address others share, and one the firewall's
+                   table does not hold are said, not drawn as held */
+                const $where = $('<td/>').text(((d.holding || []).length ? d.holding : (d.addresses || [])).join(' '));
+                if (!(d.addresses_now || []).length) {
+                    $where.append($('<div class="text-muted"/>')
+                        .text(plain("{{ lang._('No address of it is seen now.') }}")));
+                }
+                if (d.shared) {
+                    $where.append($('<div class="text-muted"/>')
+                        .text(plain("{{ lang._('Its MAC address shows more than one IPv4 address: only the addresses that reached the list, and those it had alone, are held.') }}")));
+                }
+                if (d.held === false) {
+                    $where.append($('<div class="text-warning"/>')
+                        .text(plain("{{ lang._('The firewall does not hold its addresses now.') }}")));
+                }
+                $rows.append($('<tr/>')
+                    .append($('<td/>').append($('<code/>').text(d.mac)))
+                    .append($where)
+                    .append($('<td/>').text(plain(d.name || '')))
+                    .append($('<td/>').text(reached(d.list)))
+                    .append($('<td/>').text(when(d.since)))
+                    .append($('<td/>').text(when(d.until)))
+                    .append($('<td/>').append($('<button type="button" class="btn btn-default btn-xs pg-undo"/>')
+                        .attr('data-mac', d.mac).text(plain("{{ lang._('Undo') }}")))));
+            });
+            if (!(data.isolated || []).length) {
+                $rows.append($('<tr/>').append($('<td colspan="7" class="text-muted"/>')
+                    .text(plain("{{ lang._('No device is isolated.') }}"))));
+            }
+            (data.not_isolated || []).forEach(function (d) {
+                $others.append($('<tr/>')
+                    .append($('<td/>').text(d.address || ''))
+                    .append($('<td/>').append($('<code/>').text(d.mac || '-')))
+                    .append($('<td/>').text(plain(d.name || '')))
+                    .append($('<td/>').text(reached(d.list)))
+                    .append($('<td/>').text(when(d.last)))
+                    .append($('<td/>').text(plain(not_why[d.reason] || d.reason || ''))));
+            });
+            $('#pg-not-isolated-box').toggle((data.not_isolated || []).length > 0);
+        }
+
+        function refresh_isolated() {
+            ajaxGet('/api/portguard/service/isolated', {}, draw_isolated);
+        }
+
+        $(document).on('click', '.pg-undo', function () {
+            const mac = $(this).attr('data-mac') || '';
+            stdDialogConfirm("{{ lang._('Undo the isolation') }}",
+                "{{ lang._('The device is let through at once. It is not isolated again before its isolation would have ended, and after that only when os-netreport records a newer connection of it to a command-and-control list.') }}" +
+                '<br/><br/><code>' + $('<div/>').text(mac).html() + '</code>',
+                "{{ lang._('Yes') }}", "{{ lang._('Cancel') }}", function () {
+                    ajaxCall('/api/portguard/service/release', {'mac': mac}, function (data) {
+                        if (!data || data.status !== 'ok') {
+                            stdDialogInform("{{ lang._('Undo the isolation') }}",
+                                $('<div/>').text(plain("{{ lang._('The isolation could not be undone.') }}") +
+                                    (data && data.message ? ' ' + plain(data.message) : '')).html(), "{{ lang._('Close') }}");
+                        }
+                        refresh_isolated();
+                        refresh();
+                    });
+                });
+        });
+
         /* Apply is the Settings form's own button: the note takes the reader there. */
         $('#pg-apply-go').click(function (e) {
             e.preventDefault();
@@ -171,6 +273,8 @@
                 $("#{{ formGridDevice['table_id'] }}").bootgrid('reload');
             } else if (tab === '#seen') {
                 $('#grid-seen').bootgrid('reload');
+            } else if (tab === '#isolated') {
+                refresh_isolated();
             }
         });
 
@@ -193,6 +297,7 @@
                         .text(plain(lines.length ? lines.join(' · ') : "{{ lang._('Nothing to change.') }}")).show();
                     $('#pg-apply-needed').hide();
                     refresh();
+                    refresh_isolated();
                     $('#grid-seen').bootgrid('reload');
                 });
             }, false, done);
@@ -201,6 +306,7 @@
         cards_wait('#pg-cards', ["{{ lang._('Devices listed') }}", "{{ lang._('Addresses blocked now') }}",
             "{{ lang._('Blocked') }}", "{{ lang._('Devices seen') }}"]);
         refresh();
+        refresh_isolated();
         keep_tab();
     });
 </script>
@@ -217,6 +323,7 @@
 <ul class="nav nav-tabs" data-tabs="tabs" id="maintabs">
     <li class="active"><a data-toggle="tab" href="#devices">{{ lang._('Blocked devices') }}</a></li>
     <li><a data-toggle="tab" href="#seen">{{ lang._('Devices seen') }}</a></li>
+    <li><a data-toggle="tab" href="#isolated">{{ lang._('Isolated devices') }}</a></li>
     <li><a data-toggle="tab" href="#settings">{{ lang._('Settings') }}</a></li>
 </ul>
 
@@ -239,6 +346,42 @@
             <tbody></tbody>
             <tfoot></tfoot>
         </table>
+    </div>
+    <div id="isolated" class="tab-pane">
+        <div class="text-muted" style="padding: 10px 15px 0;">
+            {{ lang._('A device os-netreport saw reaching a command-and-control list is isolated by its MAC address for the time set under Settings: the firewall blocks the addresses it is seen with, both ways - an address it takes later from the next minute. Never the firewall itself, its gateways, its HA peer\'s addresses set under High Availability, an address logged in to its web GUI or SSH, or an address this page was opened from in the last 7 days.') }}
+        </div>
+        <div id="pg-isolate-note" class="text-warning" style="display: none; padding: 10px 15px 0;"></div>
+        <table id="pg-isolated" class="table table-condensed table-striped">
+            <thead>
+                <tr>
+                    <th>{{ lang._('MAC address') }}</th>
+                    <th>{{ lang._('IP address') }}</th>
+                    <th>{{ lang._('Name') }}</th>
+                    <th>{{ lang._('Reason') }}</th>
+                    <th>{{ lang._('Isolated at') }}</th>
+                    <th>{{ lang._('Until') }}</th>
+                    <th style="width: 7em;">{{ lang._('Commands') }}</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+        <div id="pg-not-isolated-box" style="display: none;">
+            <div class="xgs-head" style="padding: 10px 15px 0;">{{ lang._('Not isolated') }}</div>
+            <table id="pg-not-isolated" class="table table-condensed table-striped">
+                <thead>
+                    <tr>
+                        <th>{{ lang._('IP address') }}</th>
+                        <th>{{ lang._('MAC address') }}</th>
+                        <th>{{ lang._('Name') }}</th>
+                        <th>{{ lang._('Reason') }}</th>
+                        <th>{{ lang._('Last connection') }}</th>
+                        <th>{{ lang._('Why not') }}</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
     </div>
     <div id="settings" class="tab-pane">
         {{ partial("layout_partials/base_form", ['fields': generalForm, 'id': 'frm_general', 'apply_btn_id': 'applyAct']) }}

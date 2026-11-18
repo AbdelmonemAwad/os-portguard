@@ -20,6 +20,22 @@
                 <Required>Y</Required>
                 <Default>0</Default>
             </log>
+            <!--
+                Automatic isolation (scripts/portguard/isolate.py, every minute): a device os-netreport
+                records reaching a command-and-control list (/var/db/netreport/infected.json) is isolated
+                by its MAC address for isolate_hours. Off until the owner turns it on (2026-11-17).
+            -->
+            <auto_isolate type="BooleanField">
+                <Required>Y</Required>
+                <Default>0</Default>
+            </auto_isolate>
+            <isolate_hours type="IntegerField">
+                <Required>Y</Required>
+                <Default>24</Default>
+                <MinimumValue>1</MinimumValue>
+                <MaximumValue>720</MaximumValue>
+                <ValidationMessage>From 1 to 720 hours.</ValidationMessage>
+            </isolate_hours>
         </general>
         <devices>
             <device type="ArrayField">

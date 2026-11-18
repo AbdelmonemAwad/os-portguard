@@ -64,7 +64,56 @@
   every minute not yet;
 - **devices seen** - the devices the firewall has seen in the last day, with their interface,
   address and maker, each a click from being blocked; the cards say how many listed devices are
-  present and how many addresses pf blocks now.
+  present and how many addresses pf blocks now;
+- **automatic isolation** (since 2026-11-17) - off until it is turned on under Settings, "Isolate
+  devices that reach a command-and-control list", with a duration (24 hours by default, 1 to 720; a
+  shorter one set ends the running isolations sooner). Every minute (`isolate.py`, from the cron entry)
+  it reads what [os-netreport](https://github.com/AbdelmonemAwad/os-netreport) records in
+  `/var/db/netreport/infected.json` - the devices of the firewall's own networks os-blocklists blocked
+  on their way to a command-and-control list; that file is written by os-netreport's alerts (1.0.7 and
+  later), and behind outbound NAT needs os-blocklists' rule `Block Lists: blocklists_<id> from
+  inside` - and isolates by its MAC address each one whose latest blocked connection is in the last 10
+  minutes. The device is the one the ARP or NDP table shows at the address when the entry is first
+  read - os-netreport names an address's device from its own scan, which may not have seen a new
+  holder of the address yet - and the one os-netreport names where they show none; it is kept for that
+  connection. The firewall blocks the isolated devices both ways through an alias of their own,
+  `portguard_isolated`: an external alias, which the page's Apply makes while the option is on.
+  `isolate.py` keeps its table with pfctl at every run: for each device the addresses that reached the
+  list, those the ARP and NDP tables show for it then, and every one they showed during its
+  isolation, so a device quiet for a while is still held when it speaks again; never a link-local
+  address, an exception's, or one the ARP or NDP table shows under another MAC address then. 64 are
+  held for one device at most: the ones that reached the list first, then those shown now, then its
+  newest; a device with more is said in the system log. An address a device takes is held from the
+  next run, within a minute, and `cut.py` cuts the open connections of the addresses the table gains;
+  an isolation writes nothing into config.xml and reloads no filter. Isolation is at the firewall:
+  devices on the same switch still reach each other.
+
+  **Never isolated:** the firewall's own addresses and MAC addresses; its gateways' addresses -
+  config.xml's, the dynamic gateways' routers, the default routes - and the MAC addresses the ARP and
+  NDP tables show at them; its HA peer's addresses as the High Availability settings give them - the
+  pfsync peer and the configuration sync's target, an address, a URL or a host name resolved within 2
+  seconds - and the MAC addresses at those, not the peer's other addresses; an address logged in to
+  its SSH, or to its web GUI within the GUI's session timeout (with "Disable logging of web GUI
+  successful logins" set, only the address the page is opened from counts) - a connection to either
+  is not a login; and an address the page was opened from in the last 7 days. A MAC address the ARP
+  table shows with more than one IPv4 address at the time - a repeater that puts its own MAC address
+  on its clients' traffic - is isolated by the addresses that reached the list only, and those it had
+  before it showed a second one, not by its clients'. Only IPv4 tells: a router that translates
+  addresses shows one IPv4 address and is isolated whole, with every device behind it, and a repeater
+  whose clients have IPv6 addresses only is not told apart from one device. No device can be set
+  never to be isolated: one taken for infected again and again is undone each time.
+
+  **Once isolated,** a device is let go only when its isolation ends, by Undo, when the option is
+  turned off, or when its MAC address turns out to be the firewall's own - nothing it does itself lets
+  it go. The **Isolated devices** tab lists each one with the list it reached, since and until when,
+  the addresses held for it and whether the firewall holds them now, and an Undo button that lets it go
+  at once and holds until its isolation would have ended - a device taken for infected by mistake keeps
+  reaching the list; after that it is isolated again only for a newer connection, as after an
+  isolation that ran out or the option turned off. What was not isolated is listed with why. The list
+  is kept in `/var/db/os-portguard/isolate.json`, and the table is always made from it: where the list
+  is lost, as a `/var` in memory loses it at a reboot, the table is emptied rather than left isolating
+  devices the page no longer shows. Turning the option off and Apply let every isolated device go, take
+  the alias away and empty its table.
 
 ~~a page in the XGS section of OPNsense's menu~~ - it is under **Firewall**, beside Block Lists (under
 **XGS** when os-xgs-npu is installed): it is not for XGS appliances only.
@@ -187,6 +236,14 @@ second machine listed by its MAC address while it held a TLS connection open:
 Still not tested: the cut every minute, the page's addresses counted only while a rule uses the
 table, the cards and the Block button's answer, and the checks before the copy.
 
+Automatic isolation (2026-11-17) is tested by `tools/test-isolate.py`, which the checks run: its
+decisions against files in a temporary directory, the commands it calls stood in for by small scripts
+(pfctl keeping the table in a file), and the rules hook under php. On the second XGS 3300 on 2026-11-16,
+in the first way of this branch (a MAC alias in config.xml): a made-up device isolated - the alias, its
+four rules in pf - and let go with Undo, the rules gone; and a device behind a lab link, which
+os-netreport listed with no MAC address, not isolated as a gateway. The external alias and its table
+are to be run on a firewall before this is merged.
+
 ## Installation
 
 It is not in the OPNsense plugin repository, so there is no `pkg install os-portguard`.
@@ -204,16 +261,22 @@ with an error stayed where every filter reload includes it), then copies `src/` 
 (the rules hook and, since 2026-10-29, the cron entry for the cut with it), puts the page in the menu
 (`place-menu.sh`: XGS with os-xgs-npu, Firewall without) and records the commit for the self-update.
 Safe to run again: the settings in config.xml are kept. Nothing is blocked until a device is listed
-and applied.
-`sh install/uninstall.sh` removes the plugin and its rules; the `portguard_blocked` alias stays in
-Firewall: Aliases, blocking nothing.
+and applied. **After an update by hand** - or by the self-update under [Updates](#updates), which runs
+this script - press **Apply** on the Settings tab once: the copy replaces the plugin's files, not what
+an earlier version's Apply made, and Apply makes the aliases as the new version keeps them (an earlier
+build of automatic isolation made `portguard_isolated` a MAC alias, which OPNsense fills from ARP
+itself, refilling the table `isolate.py` empties at an Undo).
+`sh install/uninstall.sh` removes the plugin and its rules; the `portguard_blocked` and
+`portguard_isolated` aliases stay in Firewall: Aliases, blocking nothing, the isolated devices' table
+emptied.
 
-**Before removing it**, turn **Enabled** off and **Apply** to take the alias away as well: the Apply
-removes it (switches it off instead when a rule of the owner's names it) and empties its pf table.
-The removal itself, by the script or by pkg, stops a cut that is running, deletes what the cut kept in
-`/var/db/os-portguard`, and empties the blocked devices' pf table when its alias is gone and no rule
-uses it - a table outlives its alias, and went on holding the addresses (all of this since
-2026-10-29).
+**Before removing it**, turn **Enabled** and automatic isolation off and **Apply** to take the aliases
+away as well: the Apply removes each (switches it off instead when a rule of the owner's names it) and
+empties its pf table. The removal itself, by the script or by pkg, stops a cut or an isolation that is
+running; deletes what they kept in `/var/db/os-portguard`, the list of isolated devices with it;
+empties the blocked devices' pf table when its alias is gone and no rule uses it, as a table outlives
+its alias and went on holding the addresses (all of this since 2026-10-29); and empties the isolated
+devices' table in any case.
 
 **From a release's package.** A release carries `os-portguard-<version>.pkg` and `SHA256SUMS`,
 built by `tools/make-package.sh` in the release workflow; ~~installing it has not been tested yet~~
@@ -227,9 +290,9 @@ pkg add os-portguard-*.pkg
 ```
 
 `pkg delete os-portguard` takes the rules hook with the files and reloads the filter, so the rules
-leave pf; the settings and the `portguard_blocked` alias stay, blocking nothing (see **Before removing
-it**, above). The same package is built on the firewall from a checkout with
-`sh tools/make-package.sh -o /tmp`.
+leave pf; the settings and the `portguard_blocked` and `portguard_isolated` aliases stay, blocking
+nothing, the isolated devices' table emptied (see **Before removing it**, above). The same package is
+built on the firewall from a checkout with `sh tools/make-package.sh -o /tmp`.
 
 ## Updates
 

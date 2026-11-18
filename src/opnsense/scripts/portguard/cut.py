@@ -24,6 +24,10 @@ is turned off, so blocking again starts from nothing and cuts what is listed; it
 the table changed, and by one run at a time. A state is killed by its id, as os-blocklists' are - one
 by its hosts (`pfctl -k <host> -k <host>`) killed nothing there. Never fails its caller; what it could
 not do is in the summary and in the system log, under portguard.
+
+THE ISOLATED DEVICES (2026-11-17): the same for a second table, portguard_isolated - the devices
+isolate.py isolates for reaching a command-and-control list - while automatic isolation is on and its
+alias is there; its own snapshot beside the first, its part of the summary under "isolated".
 """
 import bisect
 import fcntl
@@ -41,6 +45,8 @@ CONFIG = '/conf/config.xml'
 STATE_DIR = '/var/db/os-portguard/cut'
 STATUS = os.path.join(STATE_DIR, 'status.json')
 SNAPSHOT = os.path.join(STATE_DIR, 'portguard_blocked.json')
+ISOLATED = 'portguard_isolated'
+ISOLATED_SNAPSHOT = os.path.join(STATE_DIR, 'portguard_isolated.json')
 LOCK = os.path.join(STATE_DIR, 'lock')
 PFCTL = '/sbin/pfctl'
 TABLE = 'portguard_blocked'
@@ -55,18 +61,21 @@ def log(message):
         pass
 
 
-def watched(path=CONFIG):
-    """True when the blocked devices' table is to be watched - Port Guard on, its alias there and on;
-    False when it is not; None when config.xml cannot be read - nothing is cut then, and nothing
-    forgotten."""
+def watched(path=None, table=TABLE):
+    """True when a table is to be watched - for the blocked devices' table Port Guard on, for the
+    isolated devices' automatic isolation on, and its alias there and on; False when it is not; None
+    when config.xml cannot be read - nothing is cut then, and nothing forgotten."""
     try:
-        root = ET.parse(path).getroot()
+        root = ET.parse(path or CONFIG).getroot()
     except (OSError, ET.ParseError):
         return None
-    if (root.findtext('OPNsense/PortGuard/general/enabled') or '1') != '1':
+    if table == ISOLATED:
+        if (root.findtext('OPNsense/PortGuard/general/auto_isolate') or '0') != '1':
+            return False
+    elif (root.findtext('OPNsense/PortGuard/general/enabled') or '1') != '1':
         return False
     for alias in root.findall('OPNsense/Firewall/Alias/aliases/alias'):
-        if alias.findtext('name') == TABLE:
+        if alias.findtext('name') == table:
             return (alias.findtext('enabled') or '1') == '1'
     return False
 
@@ -183,11 +192,12 @@ def save(path, data):
         raise
 
 
-def forget():
+def forget(snapshot=None):
     """What the table held, deleted, so blocking again starts from nothing (see the top); and a
     temporary file a stopped run left behind - only the run holding the lock writes here."""
+    snapshot = snapshot or SNAPSHOT
     for entry in os.listdir(STATE_DIR):
-        if entry.startswith('.') or os.path.join(STATE_DIR, entry) == SNAPSHOT:
+        if entry.startswith('.') or os.path.join(STATE_DIR, entry) == snapshot:
             try:
                 os.unlink(os.path.join(STATE_DIR, entry))
             except OSError:
@@ -198,28 +208,26 @@ def plural(n, word, many=None):
     return f"{n} {word if n == 1 else (many or word + 's')}"
 
 
-def run():
-    status = load(STATUS, {})
-    on = watched()
-    summary = {'run': int(time.time()), 'watched': bool(on), 'cut': 0, 'total': status.get('total', 0)}
+def one(table, snapshot, status):
+    """One table's run: (its summary, whether STATUS is to be written)."""
+    on = watched(table=table)
+    summary = {'watched': bool(on), 'cut': 0, 'total': status.get('total', 0)}
     if not on:
         if on is False:
-            forget()
-            summary['message'] = 'cut: no device listed, or Port Guard off'
+            forget(snapshot)
+            summary['message'] = ('cut: no device listed, or Port Guard off' if table == TABLE else
+                                  'cut: no device isolated, or automatic isolation off')
         else:
             summary['message'] = 'cut: config.xml could not be read'
         # once a minute with nothing to watch: written only when it says something new
-        if status.get('message') != summary['message']:
-            save(STATUS, summary)
-        return summary
+        return summary, status.get('message') != summary['message']
 
-    now = table_entries(TABLE)
+    now = table_entries(table)
     if now is None:
         summary['error'] = 'no pf table by this name - is the alias loaded?'
         summary['message'] = 'cut: ' + summary['error']
-        save(STATUS, summary)
-        return summary
-    before = load(SNAPSHOT, None)
+        return summary, True
+    before = load(snapshot, None)
     kept = None if before is None else set(before)
     new = now if kept is None else now - kept
     summary.update({'entries': len(now), 'added': len(new)})
@@ -240,14 +248,24 @@ def run():
     # what was compared, not a second reading: an address added since is new at the next run; and
     # written only when it is not what was kept already
     if now != kept:
-        save(SNAPSHOT, sorted(now))
+        save(snapshot, sorted(now))
     if new or summary['cut']:
-        log(f"{TABLE}: {plural(len(new), 'new address', 'new addresses')} of {len(now)}, "
+        log(f"{table}: {plural(len(new), 'new address', 'new addresses')} of {len(now)}, "
             f"{plural(summary['cut'], 'open connection')} cut")
     summary['total'] += summary['cut']
     summary['message'] = (f"cut: {plural(len(now), 'address', 'addresses')} blocked, "
                           f"{summary['cut']} cut now, {summary['total']} in all")
-    save(STATUS, summary)
+    return summary, True
+
+
+def run():
+    status = load(STATUS, {})
+    summary, write = one(TABLE, SNAPSHOT, status)
+    summary['run'] = int(time.time())
+    isolated, write_isolated = one(ISOLATED, ISOLATED_SNAPSHOT, status.get('isolated') or {})
+    summary['isolated'] = isolated
+    if write or write_isolated:
+        save(STATUS, summary)
     return summary
 
 
