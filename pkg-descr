@@ -12,6 +12,11 @@ those needs the switch.
 Plugin Changelog
 ================
 
+1.0.3
+
+* Phase 1: automatic isolation of a device that reached a command-and-
+  control list, off until turned on
+
 1.0.2
 
 * an update installed only as its owner signed it: the release's
