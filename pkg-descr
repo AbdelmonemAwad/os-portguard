@@ -12,6 +12,20 @@ those needs the switch.
 Plugin Changelog
 ================
 
+1.0.3
+
+* automatic isolation, off until turned on: a device os-netreport 1.0.7
+  records reaching a command-and-control list that os-blocklists blocks
+  is isolated by its MAC address for the time set (1 to 720 hours, 24 by
+  default) - the addresses it is seen with blocked both ways and their
+  open connections cut, one it takes later blocked within a minute - and
+  shown with its reason, its time and an Undo button
+* never isolated: the firewall itself and its gateways, its HA peer, an
+  address logged in to its web GUI or SSH, and an address the page was
+  opened from in the last 7 days
+* let go when its time ends, by Undo, or when the option is turned off,
+  and why is kept and shown
+
 1.0.2
 
 * an update installed only as its owner signed it: the release's
